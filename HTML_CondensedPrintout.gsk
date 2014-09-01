@@ -1,0 +1,222 @@
+#***************************************
+# HTMLName=CondensedPrintout
+# MacDescription = Condensed html print out of all caches in the current filter with wideView style
+# MacVersion = 1.9
+# MacAuthor = jim_carson
+# MacFileName = HTML_CondensedPrintout.gsk
+# MacUrl = http://gsak.net/board/index.php?showtopic=25732
+# SplitScreen=No
+# Export=No
+# Offline=No
+# Condensed=Yes
+#***************************************
+# GSAK images for cache and log types are stored here
+#  
+# 2014-06-07 Changes - Jim Carson (www.jimcarson.com)
+#
+# Replaced deprecated HTML with CustomFormat
+# Style sheet embedded within data block rather than string contatenation.
+# Last Found Date added to header.  If it's been at least a year, it appears in red font.
+#    (Several caches I am considering during my trip to Alberta have gone over a year since 
+#    last find; they may be there, but I don't know because people don't log DNFs.
+#    If after ten minutes on a 1/1 I don't see it and the font is red, I'm moving on.)
+# GC Code near beginning.
+# Changed border color to black
+# If no hint, just skip the line.  It will still print if the CO has "not yet" or some
+#     other unhelpful nonsense.
+# If it isn't a physical cache (e.g., Earthcache, Virtual), omit the size
+# Corrected coordinates more prominent
+# Removed "WGS84" label
+# Status indicated on top, only when it's NOT active/unfound.
+# Favorite points $d_FavPoints
+#
+# The v2 version uses the stanard header, which provides attribute icons.
+#
+# 2013-08-02 Changes - Jim Carson (www.jimcarson.com)
+#  1) Replaced the deprecated GeoCalc with GCalc
+#  2) Removed the second column for the hint as this causes the printout size
+#  to be really huge when doing multiple caches.
+
+Declare Var=$HeaderHtml Type=String
+Declare Var=$MainTableHtml Type=String
+
+$images = "file://" + $_Install + "/images"
+$images = replace("\","/",$images,false)
+
+
+#
+# Display Header
+#
+$_htmlHeader = $HeaderHtml
+
+# Begin main table
+$h = $MainTableHtml
+
+$h = $h + "<img src=" + quote($images + "\cache" + $d_CacheType + ".gif") 
+$h = $h + "alt="  + quote($d_CacheType) + " align='absmiddle'>" 
+$h = $h + "<span class='title'>" + CustomFormat("Clean",$d_name) + "</span>"
+#
+# Waypoint code and link
+#
+$h = $h + " <a href='" + $d_Url + "'>" + $d_Code + "</a>"
+#
+# Status shown *only* if it's not active / unfound
+#
+IF ($d_TempDisabled)
+  $h = $h + "| <span class='disabled'>Disabled</span>"
+ENDIF
+IF ($d_Archived)
+  $h = $h + "| <span class='archived'>Archived</span>"
+ENDIF
+IF ($d_Found)
+  $h = $h + "| <span class='found'>Found</span>"
+ENDIF
+
+$type =CacheType($d_CacheType)
+$h = $h + "<br />Type: <strong>" + $type + "</strong>"
+
+#
+# We only care about cache size for physical containers.
+#
+IF ($d_CacheType = "U" or $d_CacheType = "T"  or $d_CacheType = "B" or $d_CacheType = "M" or $d_CacheType = "H" or $d_CacheType = "I")
+    If ($d_container="Not chosen" or $d_container="Virtual")
+      $sizeImage = "<img src=" + quote($images + "\con_other.gif") 
+      $sizeImage = $sizeImage + "alt="  + "$d_container" + " align='absmiddle'>"
+    ELSE
+      $sizeImage = "<img src=" + quote($images + "\con_" + $d_container + ".gif") 
+      $sizeImage = $sizeImage + "alt="  + "$d_container" + " align='absmiddle'>" 
+    ENDIF
+    $h = $h + " | Size: <strong>" + $d_container + "</strong> " + $sizeImage
+ENDIF
+
+
+# Difficulty Stars
+$Diff = Replace(".","_", NumToStr($d_difficulty), false)
+$Diff = Replace(",","_", $Diff, false)
+$h = $h + " | Difficulty: <img src=" + quote($images + "\stars" + $Diff + ".gif") 
+$h = $h + "alt="  + "$d_difficulty" + " align='absmiddle'>" 
+
+# Terrain Stars
+$Terr = Replace(".","_", NumToStr($d_Terrain), false)
+$Terr = Replace(",","_", $Terr, false)
+$h = $h + " | Terrain: <img src=" + quote($images + "\stars" + $Terr + ".gif") 
+$h = $h + "alt="  + "$d_Terrain" + " align='absmiddle'>" 
+#
+# Favorite points, if non-zero
+#
+IF $d_FavPoints > 0
+   $h = $h + "| Favorites: " + NumToStr($d_FavPoints)
+ENDIF
+
+# Cache Owner
+$h = $h + "<br />By: " + $d_PlacedBy
+
+# Hidden Date
+$h = $h + " | Hidden: <strong>" + DateFormat($d_PlacedDate) + "</strong>"
+# Last Found
+IF $d_LastFoundDate > [00000000]
+   $h = $h + " | Last Found: <strong>" 
+   IF DateDiff($d_LastFoundDate, $_Today) >= 365
+       $h = $h + "<span class='longfind'>" + DateFormat($d_LastFoundDate) + "</span>"
+   ELSE
+       $h = $h + DateFormat($d_LastFoundDate)
+   ENDIF
+   $h = $h + "</strong>"
+ENDIF
+
+
+# Display Coordinates
+$temp = GCalc($d_Latitude + ";" + $d_Longitude, "FormatMinutes")
+$h = $h + "<br />"
+IF $d_HasCorrected
+  $h=$h+"<span class='corrected'>(Corrected)</span> "
+ENDIF
+$h = $h + "Coordinates: <strong>" +  extract($temp,";",1) + " " + extract($temp,";",2) + "</strong>"
+
+# End Title Block
+$h = $h + "</div>"
+$h = $h + CustomFormat("Description","RemoveAdditional=Yes")
+
+$h = $h + CustomFormat("GSAKNotes","")
+$h = $h + CustomFormat("Logs","")
+
+# 
+# Only print the hint line if there is a hint.  If the Cache Owner says "no hints,"
+# then we can only wag our finger at them.
+#
+IF not (IsEmpty($d_Hints))
+        $DecryptHint = SysInfo("gsakini;TfmPrint;chkDecrypt.Checked")
+        $h = $h + "<b>Hint: </b>"
+	If ($DecryptHint="False")
+		$h = $h + CustomFormat("Hints","ShowTitle=No Decode=No")
+		$h = $h + "<br><span style=font-family:Courier, 'Courier New', monospace>Decryption key <br>A|B|C|D|E|F|G|H|I|J|K|L|M<br>N|O|P|Q|R|S|T|U|V|W|X|Y|Z</span>"
+	ELSE
+		$h = $h + CustomFormat("Hints","ShowTitle=No Decode=Yes")
+	ENDIF
+ENDIF
+
+$h = $h + CustomFormat("Child Waypoints","ShowTitle=No")
+$h = $h + "</td></tr></table>"
+$h = $h + "</td></tr></table></div>"
+
+$_htmlbody = $h
+$_htmlFooter = "</body></html>"
+
+<data> VarName=$HeaderHtml
+<title>Cache Information Page</title>
+<style type='text/css'>
+body,td,th {
+    font-family: Verdana, Arial, Helvetica, sans-serif;
+    font-size: 12px;
+    color: #333333;
+}
+body {
+    background-color: #FFFFFF; 
+    margin-top:1;
+    margin-bottom:2;
+    margin-left:2;
+    margin-right:2;
+}
+.title {font-size: 18px;
+    font-weight: bold;
+}
+.archived {
+    color: #990000;
+    background-color: #FFCC00; 
+    font-size: 14px;
+    font-weight: bold;
+}
+.disabled {
+    color: #990000;
+    background-color: #FFFFCC; 
+    font-size: 14px;
+    font-weight: bold;
+}
+.longfind {
+    color: #800000;
+    font-size: 12px;
+    font-style: italic;
+}
+.found {
+    color: #009900;
+    font-size: 12px;
+    font-weight: bold;
+}
+.corrected {
+    color: #006600; 
+    font-size: 10px; 
+    font-weight: normal;
+}
+</style>
+</head>
+<body>
+
+<enddata>
+
+<data> VarName=$MainTableHtml
+<div style='page-break-after:always'>
+<table align='center' bgcolor='white' border='0' cellpadding='2' cellspacing='0' width='100%'><tr><td>
+<table align='center' bgcolor='#000000' border='0'  cellspacing='2' cellpadding='10' width='100%'>
+<tr><td width='50%' valign='top' bgcolor='#FFFFFF'>
+<div align='center'>
+<enddata>
