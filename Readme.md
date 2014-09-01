@@ -22,7 +22,7 @@ Version 1.9 (2014-06-09):
 * If the cache doesn't typically have a container (e.g., Virtuals, Events), omit the container size.
 * Corrected coordinates slightly more apparent, also removed the WGS84 label.
 * Style sheet embedded within the data block rather than string concatenation.
-![Sample Header](http://cdn.jimcarson.com/HTML_CondensedPrint_example.png)
+![Sample Header](HTML_CondensedPrint_example.png)
 
 Version 1.8 (2013-08-03):
 * Replaced the deprecated GeoCalc command with GCalc. 
