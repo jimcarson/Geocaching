@@ -1,4 +1,7 @@
-##HTML\_CondensedPrintout.gsk
+PGC_GC1M0D0.lua - Lua-based checker for the geocache [GC1M0D0 - Bellevue Blackout](https://coord.info/gc1m0d0), where the objective is to find all active geocaches, for a moment in time, within the Bellevue, WA, city limits.  The original script is based on the original by Foolie.  Version forked to ignore challenge caches and fix overflow condition in the query.
+
+
+HTML\_CondensedPrintout.gsk
 This is a macro used in [GSAK](http://gsak.net/) (Geocaching Swiss Army Knife) to produce a condensed printout of geocaches based on the current filters.  The original macro was written by bazzanowitz in 2008. 
 
 #####Why you'd want this macro
