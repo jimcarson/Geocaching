@@ -60,13 +60,17 @@ local eventcachetypes = {
 --
 -- These caches are either Adventure Lab bonus or Challenge caches 
 -- in and of themselves.  
--- 2025-06-22 jim_carson
+-- 2026-02-27 jim_carson; updated with two additional challenges
 local excluded_caches = {
+  -- Adventure Lab Bonuse 
   "GCAHV69", -- Letterbox Post Office Series Bonus cache 
   "GCB15TC", -- Mystery on the 2 Line - Bonus Cache
+  -- Challenges
   "GCAVD5Z", -- 2024 Dragon Challenge: Wherigo 69 Calendar Days
   "GC24KA3", -- Cougar Mountain Blackout (falls outside of polygon)
   "GCB75J8", -- 100 Happy Haunts Challenge 💯 👻
+  "GCBH40B", -- Ssssnake! Challenge 🐍
+  "GCB8MC7", -- Summer's Back! Challenge ☂ 🏖 ☀ ⛺
   }
 
 function IsExcludedCache(gc)
@@ -271,7 +275,7 @@ local activeCachesInPolygon = 0
 local polyCaches = { }
 local numberOfReceivedCaches = 0
 
---Trad	1½	1	933 (2025-06-22)
+--Trad	1½	1	111 (2026-02-27)
 countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit = true, dontCountDisabledTowardsLimit = true,
                                    filter = {
                                              country = conf.country,
@@ -308,7 +312,8 @@ for _, cache in ipairs(countyCaches) do
     end
   end
 end
---Trad	1½	1½	933 (2022-03-02)
+--Trad	1½	1½	958 (2026-02-27)
+-- This is the one that will break next.
 countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit = true, dontCountDisabledTowardsLimit = true,
                                    filter = {
                                              country = conf.country,
@@ -328,7 +333,7 @@ if numberOfReceivedCaches >= 1000 then
   PGC.print("getCaches got into saturation (> 1000 caches)\n")
   checkerFail = true
 end
---Trad	1½	T>1½	507 (2022-03-02)
+--Trad	1½	T>1½	546 (2026-02-27)
 countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit = true, dontCountDisabledTowardsLimit = true,
                                    filter = {
                                              country = conf.country,
@@ -365,7 +370,7 @@ for _, cache in ipairs(countyCaches) do
     end
   end
 end
---Trad	!1½	1+1½	840 (2022-03-02)
+--Trad	!1½	1	201 (2026-02-27)
 countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit = true, dontCountDisabledTowardsLimit = true,
                                    filter = {
                                              country = conf.country,
@@ -373,14 +378,14 @@ countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit 
                                              county = conf.county,
                                              types = {'Traditional Cache'},
                                              difficulties = {'1.0', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
-                                             terrains = {'1.0', '1.5'},
+                                             terrains = {'1.0'},
                                              excludeDisabled = true, excludeArchived = true}})
 
 numberOfReceivedCaches = 0
 for _, cache in ipairs(countyCaches) do
   numberOfReceivedCaches = numberOfReceivedCaches + 1
 end
-PGC.print("Trad, !D1½, T1+T1½: ", numberOfReceivedCaches, "\n")
+PGC.print("Trad, !D1½, T1: ", numberOfReceivedCaches, "\n")
 if numberOfReceivedCaches >= 1000 then
   PGC.print("getCaches got into saturation (> 1000 caches)\n")
   checkerFail = true
@@ -402,7 +407,44 @@ for _, cache in ipairs(countyCaches) do
     end
   end
 end
---Trad	!1½	2	343 (2022-03-02)
+--Trad	!1½	1½	841 (2026-02-27)
+countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit = true, dontCountDisabledTowardsLimit = true,
+                                   filter = {
+                                             country = conf.country,
+                                             region = conf.region,
+                                             county = conf.county,
+                                             types = {'Traditional Cache'},
+                                             difficulties = {'1.0', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
+                                             terrains = {'1.5'},
+                                             excludeDisabled = true, excludeArchived = true}})
+
+numberOfReceivedCaches = 0
+for _, cache in ipairs(countyCaches) do
+  numberOfReceivedCaches = numberOfReceivedCaches + 1
+end
+PGC.print("Trad, !D1½, T1½: ", numberOfReceivedCaches, "\n")
+if numberOfReceivedCaches >= 1000 then
+  PGC.print("getCaches got into saturation (> 1000 caches)\n")
+  checkerFail = true
+end
+
+for _, cache in ipairs(countyCaches) do
+  local lat = tonumber(cache.latitude)
+  local lon = tonumber(cache.longitude)
+
+  for _, polyname in pairs(polynames) do
+    local poly = polygons[polyname]
+    local bboxok = lat ~= nil and lon ~= nil and
+                   lat >= poly.bbox.min[1] and lat <= poly.bbox.max[1] and
+                   lon >= poly.bbox.min[2] and lon <= poly.bbox.max[2]
+
+    if bboxok and IsInsidePoly(lat, lon, poly) then
+      table.insert(polyCaches, cache) -- only appended to the end
+      activeCachesInPolygon = activeCachesInPolygon + 1
+    end
+  end
+end
+--Trad	!1½	2	421 (2026-02-27)
 countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit = true, dontCountDisabledTowardsLimit = true,
                                    filter = {
                                              country = conf.country,
@@ -439,7 +481,7 @@ for _, cache in ipairs(countyCaches) do
     end
   end
 end
---Trad	!1½	T>2	649 (2022-03-02)
+--Trad	!1½	T>2	751 (2026-02-27)
 countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit = true, dontCountDisabledTowardsLimit = true,
                                    filter = {
                                              country = conf.country,
@@ -476,7 +518,7 @@ for _, cache in ipairs(countyCaches) do
     end
   end
 end
---Not trad	all	1+1½	659 (2022-03-02)
+--Not trad	all	1	215 (2026-02-27)
 countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit = true, dontCountDisabledTowardsLimit = true,
                                    filter = {
                                              country = conf.country,
@@ -484,14 +526,14 @@ countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit 
                                              county = conf.county,
                                              types = {'Multi-cache', 'Virtual Cache', 'Letterbox Hybrid', 'Unknown Cache', 'Project APE Cache', 'Webcam Cache', 'Earthcache', 'Wherigo Cache'},
                                              difficulties = {'1.0', '1.5', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
-                                             terrains = {'1.0', '1.5'},
+                                             terrains = {'1.0'},
                                              excludeDisabled = true, excludeArchived = true}})
 
 numberOfReceivedCaches = 0
 for _, cache in ipairs(countyCaches) do
   numberOfReceivedCaches = numberOfReceivedCaches + 1
 end
-PGC.print("Not trad, all D, T1+T1½: ", numberOfReceivedCaches, "\n")
+PGC.print("Not trad, all D, T1: ", numberOfReceivedCaches, "\n")
 if numberOfReceivedCaches >= 1000 then
   PGC.print("getCaches nontraditional got into saturation (> 1000 caches)\n")
   checkerFail = true
@@ -513,7 +555,44 @@ for _, cache in ipairs(countyCaches) do
     end
   end
 end
---Not trad	all	T>1½	631 (2022-03-02)
+--Not trad	all	1½	740 (2026-02-27)
+countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit = true, dontCountDisabledTowardsLimit = true,
+                                   filter = {
+                                             country = conf.country,
+                                             region = conf.region,
+                                             county = conf.county,
+                                             types = {'Multi-cache', 'Virtual Cache', 'Letterbox Hybrid', 'Unknown Cache', 'Project APE Cache', 'Webcam Cache', 'Earthcache', 'Wherigo Cache'},
+                                             difficulties = {'1.0', '1.5', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
+                                             terrains = {'1.5'},
+                                             excludeDisabled = true, excludeArchived = true}})
+
+numberOfReceivedCaches = 0
+for _, cache in ipairs(countyCaches) do
+  numberOfReceivedCaches = numberOfReceivedCaches + 1
+end
+PGC.print("Not trad, all D, T1½: ", numberOfReceivedCaches, "\n")
+if numberOfReceivedCaches >= 1000 then
+  PGC.print("getCaches nontraditional got into saturation (> 1000 caches)\n")
+  checkerFail = true
+end
+
+for _, cache in ipairs(countyCaches) do
+  local lat = tonumber(cache.latitude)
+  local lon = tonumber(cache.longitude)
+  
+  for _, polyname in pairs(polynames) do
+    local poly = polygons[polyname]
+    local bboxok = lat ~= nil and lon ~= nil and
+                   lat >= poly.bbox.min[1] and lat <= poly.bbox.max[1] and
+                   lon >= poly.bbox.min[2] and lon <= poly.bbox.max[2]
+
+    if (not IsExcludedCache(cache.gccode)) and bboxok and IsInsidePoly(lat, lon, poly) then
+      table.insert(polyCaches, cache) -- only appended to the end
+      activeCachesInPolygon = activeCachesInPolygon + 1
+    end
+  end
+end
+--Not trad	all	T>1½	809 (2026-02-27)
 countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit = true, dontCountDisabledTowardsLimit = true,
                                    filter = {
                                              country = conf.country,
