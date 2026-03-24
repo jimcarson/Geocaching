@@ -1,13 +1,3 @@
--- 2026-03-23 jim_carson - fixed several bugs:
--- IsExcludedCache was not being applied to traditional cache loops, 
--- only when building the polyCaches for non-traditional types.  
--- Added a seen table to facilitate breaking out the D 1 1/2/T 1 1/2
--- traditional, which is reaching the 1000 limit (982)
--- Owned caches were being counted in totalFinds
--- Owned caches diagnostic was including everything in King County.  Now 
--- limited to Bellevue.
--- Archived caches were inflating totalFinds.  These are now counted separately
--- Summary count now reflects caches remaining.
 local args={...}
 local conf = args[1].config
 local profileName = args[1].profileName
@@ -73,7 +63,7 @@ local eventcachetypes = {
 -- in and of themselves.  
 -- 2026-02-27 jim_carson; updated with two additional challenges
 local excluded_caches = {
-  -- Adventure Lab Bonuses
+  -- Adventure Lab Bonuse 
   "GCAHV69", -- Letterbox Post Office Series Bonus cache 
   "GCB15TC", -- Mystery on the 2 Line - Bonus Cache
   -- Challenges
@@ -288,7 +278,7 @@ countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit 
                                              types = {'Traditional Cache'},
                                              difficulties = {'1.5'},
                                              terrains = {'1.0'},
-                                             excludeArchived = true}})
+                                             excludeDisabled = true, excludeArchived = true}})
 
 numberOfReceivedCaches = 0
 for _, cache in ipairs(countyCaches) do
@@ -329,7 +319,7 @@ countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit 
                                              types = {'Traditional Cache'},
                                              difficulties = {'1.5'},
                                              terrains = {'1.5'},
-                                             excludeArchived = true}})
+                                             excludeDisabled = true, excludeArchived = true}})
 
 numberOfReceivedCaches = 0
 for _, cache in ipairs(countyCaches) do
@@ -349,7 +339,7 @@ countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit 
                                              types = {'Traditional Cache'},
                                              difficulties = {'1.5'},
                                              terrains = {'2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
-                                             excludeArchived = true}})
+                                             excludeDisabled = true, excludeArchived = true}})
 
 numberOfReceivedCaches = 0
 for _, cache in ipairs(countyCaches) do
@@ -389,7 +379,7 @@ countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit 
                                              types = {'Traditional Cache'},
                                              difficulties = {'1.0', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
                                              terrains = {'1.0'},
-                                             excludeArchived = true}})
+                                             excludeDisabled = true, excludeArchived = true}})
 
 numberOfReceivedCaches = 0
 for _, cache in ipairs(countyCaches) do
@@ -429,7 +419,7 @@ countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit 
                                              types = {'Traditional Cache'},
                                              difficulties = {'1.0', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
                                              terrains = {'1.5'},
-                                             excludeArchived = true}})
+                                             excludeDisabled = true, excludeArchived = true}})
 
 numberOfReceivedCaches = 0
 for _, cache in ipairs(countyCaches) do
@@ -469,7 +459,7 @@ countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit 
                                              types = {'Traditional Cache'},
                                              difficulties = {'1.0', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
                                              terrains = {'2.0'},
-                                             excludeArchived = true}})
+                                             excludeDisabled = true, excludeArchived = true}})
 
 numberOfReceivedCaches = 0
 for _, cache in ipairs(countyCaches) do
@@ -509,7 +499,7 @@ countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit 
                                              types = {'Traditional Cache'},
                                              difficulties = {'1.0', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
                                              terrains = {'2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
-                                             excludeArchived = true}})
+                                             excludeDisabled = true, excludeArchived = true}})
 
 numberOfReceivedCaches = 0
 for _, cache in ipairs(countyCaches) do
@@ -549,7 +539,7 @@ countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit 
                                              types = {'Multi-cache', 'Virtual Cache', 'Letterbox Hybrid', 'Unknown Cache', 'Project APE Cache', 'Webcam Cache', 'Earthcache', 'Wherigo Cache'},
                                              difficulties = {'1.0', '1.5', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
                                              terrains = {'1.0'},
-                                             excludeArchived = true}})
+                                             excludeDisabled = true, excludeArchived = true}})
 
 numberOfReceivedCaches = 0
 for _, cache in ipairs(countyCaches) do
@@ -589,7 +579,7 @@ countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit 
                                              types = {'Multi-cache', 'Virtual Cache', 'Letterbox Hybrid', 'Unknown Cache', 'Project APE Cache', 'Webcam Cache', 'Earthcache', 'Wherigo Cache'},
                                              difficulties = {'1.0', '1.5', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
                                              terrains = {'1.5'},
-                                             excludeArchived = true}})
+                                             excludeDisabled = true, excludeArchived = true}})
 
 numberOfReceivedCaches = 0
 for _, cache in ipairs(countyCaches) do
@@ -629,7 +619,7 @@ countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit 
                                              types = {'Multi-cache', 'Virtual Cache', 'Letterbox Hybrid', 'Unknown Cache', 'Project APE Cache', 'Webcam Cache', 'Earthcache', 'Wherigo Cache'},
                                              difficulties = {'1.0', '1.5', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
                                              terrains = {'2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
-                                             excludeArchived = true}})
+                                             excludeDisabled = true, excludeArchived = true}})
 
 numberOfReceivedCaches = 0
 for _, cache in ipairs(countyCaches) do
@@ -762,6 +752,7 @@ local lastqualifying = nil
 local types = {}
 local nonTraditional = 0
 local archivedFinds = 0
+local disabledInPolygon = {}
 
 for _, cache in ipairs(finds) do
   local lat = tonumber(cache.latitude)
@@ -780,8 +771,11 @@ for _, cache in ipairs(finds) do
           if cache.archived == "1" then
             -- count archived finds separately for historical reference
             archivedFinds = archivedFinds + 1
+          elseif cache.disabled == "1" then
+            -- track disabled caches in polygon for debug, but do not count toward qualification
+            table.insert(disabledInPolygon, cache)
           else
-            -- active and disabled finds count toward qualification
+            -- only active finds count toward qualification
             poly.counter = poly.counter + 1
             table.insert(poly.caches, cache)
             types[cache.type] = (types[cache.type] or 0) + 1
@@ -792,6 +786,14 @@ for _, cache in ipairs(finds) do
         end
       end
     end
+  end
+end
+
+-- debug: list disabled caches found inside the polygon
+if #disabledInPolygon > 0 then
+  PGC.print("Disabled caches found in polygon (", #disabledInPolygon, "):\n")
+  for _, cache in ipairs(disabledInPolygon) do
+    PGC.print("  DISABLED: ", cache.gccode, " ", cache.cache_name, "\n")
   end
 end
 
@@ -847,7 +849,6 @@ end
 local minTypes = conf.minTypes or 0
 local minNonTraditional = conf.minNonTraditional or 0
 
-local ok = totalFinds >= required and #typesFound >= minTypes and nonTraditional >= minNonTraditional
 local html = nil
 local log = nil
 if minTypes > 0 then
@@ -857,11 +858,7 @@ end
 if minNonTraditional > 0 then
   table.insert(logtable, 1, "Of those, "..nonTraditional.." are non-traditional caches ("..minNonTraditional.." required)")
 end
-if conf.friendlyName then
-  table.insert(logtable, 1, "I have found "..totalFinds.." caches in "..conf.friendlyName.." ("..required.." required), plus "..archivedFinds.." found caches that are now archived")
-else
-  table.insert(logtable, 1, "Profile have found "..totalFinds.." caches in the designated area ("..required.." required), plus "..archivedFinds.." found caches that are now archived")
-end
+-- summary line and ok inserted after remainingCount is known (below)
 
 
 -- list caches still missing to be found
@@ -897,10 +894,11 @@ end
 
 -- update summary line to use required - remaining as the find count
 local qualifyingFinds = required - remainingCount
+local ok = qualifyingFinds >= required and #typesFound >= minTypes and nonTraditional >= minNonTraditional
 if conf.friendlyName then
-  logtable[1] = "I have found "..qualifyingFinds.." caches in "..conf.friendlyName.." ("..required.." required), plus "..archivedFinds.." found caches that are now archived"
+  table.insert(logtable, 1, "I have found "..qualifyingFinds.." caches in "..conf.friendlyName.." ("..required.." required), plus "..archivedFinds.." found caches that are now archived")
 else
-  logtable[1] = "Profile have found "..qualifyingFinds.." caches in the designated area ("..required.." required), plus "..archivedFinds.." found caches that are now archived"
+  table.insert(logtable, 1, "Profile have found "..qualifyingFinds.." caches in the designated area ("..required.." required), plus "..archivedFinds.." found caches that are now archived")
 end
 
 -- map shows remaining caches if any, otherwise shows all found caches
