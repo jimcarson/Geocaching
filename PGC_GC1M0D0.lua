@@ -40,8 +40,6 @@ local Bellevue_polygon = {
 
 local checkerFail = false
 local initialpolygons = {}
-local archivedok = conf.archivedok or true
-local regionfilter = nil
 local bbox = { max = {-1000, -1000}, min = {1000, 1000}}
 local seen = {}
 
@@ -59,27 +57,41 @@ local eventcachetypes = {
 }
 
 --
--- These caches are either Adventure Lab bonus or Challenge caches 
--- in and of themselves.  
--- 2026-02-27 jim_carson; updated with two additional challenges
+-- Caches excluded from the challenge:
+-- 1) Manually excluded by gccode (edge cases not caught by name matching)
+-- 2) Unknown Cache type with "Challenge" or "Bonus" in the name (auto-detected below)
+-- 2026-02-27 jim_carson
 local excluded_caches = {
-  -- Adventure Lab Bonuse 
-  "GCAHV69", -- Letterbox Post Office Series Bonus cache 
-  "GCB15TC", -- Mystery on the 2 Line - Bonus Cache
-  -- Challenges
-  "GCAVD5Z", -- 2024 Dragon Challenge: Wherigo 69 Calendar Days
   "GC24KA3", -- Cougar Mountain Blackout (falls outside of polygon)
-  "GCB75J8", -- 100 Happy Haunts Challenge 💯 👻
-  "GCBH40B", -- Ssssnake! Challenge 🐍
-  "GCB8MC7", -- Summer's Back! Challenge ☂ 🏖 ☀ ⛺
-  }
+}
 
-function IsExcludedCache(gc)
-  for _, x in pairs(excluded_caches) do
-      if gc == x then 
-          PGC.print("Excluded cache:", x, "\n")
-          return true 
+-- Terms that identify Unknown Caches to auto-exclude by name
+local excluded_name_terms = { "Challenge", "Bonus Cache" }
+
+-- Newer GC codes start with GC + one letter + 4 alphanumeric chars (e.g. GCB75J8)
+-- Older numeric codes like GC3GN90 or GC1M0D0 do not match this pattern
+local function isNewerGCCode(gc)
+  return string.match(gc, "^GC%a%w%w%w%w$") ~= nil
+end
+
+-- Build a lookup set for O(1) exclusion checks
+local excluded_set = {}
+for _, gc in ipairs(excluded_caches) do
+  excluded_set[gc] = true
+end
+
+function IsExcludedCache(gc, cachetype, cachename)
+  if excluded_set[gc] then
+    PGC.print("Excluded cache (manual):", gc, "\n")
+    return true
+  end
+  if cachetype == "Unknown Cache" and cachename ~= nil and isNewerGCCode(gc) then
+    for _, term in ipairs(excluded_name_terms) do
+      if string.find(cachename, term, 1, true) then
+        PGC.print("Excluded cache (auto):", gc, " - ", cachename, "\n")
+        return true
       end
+    end
   end
   return false
 end
@@ -95,7 +107,6 @@ end
 
 
 -- initialize bboxes
-local numberofpolygons = 0
 local polynames = {}
 local polygons = {}
 local excludenames = {}
@@ -187,7 +198,6 @@ for name, poly in pairs(polygons) do
      end
    end
   end
-  numberofpolygons = numberofpolygons + 1
 end
 
 table.sort(polynames)
@@ -263,392 +273,89 @@ function IsInsidePoly(lat, lon, poly)
 
 end
 
--- get caches in county
-local countyCaches = { }
+-- Helper: returns the matching polygon if lat/lon is inside it, nil otherwise
+local function isInPolygon(lat, lon)
+  if lat == nil or lon == nil then return nil end
+  for _, polyname in pairs(polynames) do
+    local poly = polygons[polyname]
+    if lat >= poly.bbox.min[1] and lat <= poly.bbox.max[1] and
+       lon >= poly.bbox.min[2] and lon <= poly.bbox.max[2] and
+       IsInsidePoly(lat, lon, poly) then
+      return poly
+    end
+  end
+  return nil
+end
+
+-- get caches in polygon
+-- Queries are split by type/difficulty/terrain buckets to stay under the 1000-cache API limit.
+-- Each entry: { label, types, difficulties, terrains }
+local ALL_DIFF = {'1.0', '1.5', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'}
+local NON_TRAD = {'Multi-cache', 'Virtual Cache', 'Letterbox Hybrid', 'Unknown Cache',
+                  'Project APE Cache', 'Webcam Cache', 'Earthcache', 'Wherigo Cache'}
+local NOT_1HALF_DIFF = {'1.0', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'}
+
 local activeCachesInPolygon = 0
-local polyCaches = { }
-local numberOfReceivedCaches = 0
+local polyCaches = {}
 
---Trad	1½	1	111 (2026-02-27)
-countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit = true, dontCountDisabledTowardsLimit = true,
-                                   filter = {
-                                             country = conf.country,
-                                             region = conf.region,
-                                             county = conf.county,
-                                             types = {'Traditional Cache'},
-                                             difficulties = {'1.5'},
-                                             terrains = {'1.0'},
-                                             excludeDisabled = true, excludeArchived = true}})
+local cacheQueries = {
+  -- Traditional, D1½ buckets (2026-02-27 counts)
+  { label="Trad, D1½, T1",    types={'Traditional Cache'}, difficulties={'1.5'},         terrains={'1.0'} },
+  -- Trad D1½ T1½ is near saturation so split by date to be safe
+  { label="Trad, D1½, T1½ (pre-2026)",  types={'Traditional Cache'}, difficulties={'1.5'}, terrains={'1.5'} },
+  { label="Trad, D1½, T1½ (2026+)",     types={'Traditional Cache'}, difficulties={'1.5'}, terrains={'1.5'}, minHiddenDate="2026-01-01" },
+  { label="Trad, D1½, T>1½",  types={'Traditional Cache'}, difficulties={'1.5'},         terrains={'2.0','2.5','3.0','3.5','4.0','4.5','5.0'} },
+  -- Traditional, D!=1½ buckets
+  { label="Trad, !D1½, T1",   types={'Traditional Cache'}, difficulties=NOT_1HALF_DIFF, terrains={'1.0'} },
+  { label="Trad, !D1½, T1½",  types={'Traditional Cache'}, difficulties=NOT_1HALF_DIFF, terrains={'1.5'} },
+  { label="Trad, !D1½, T2",   types={'Traditional Cache'}, difficulties=NOT_1HALF_DIFF, terrains={'2.0'} },
+  { label="Trad, !D1½, T>2",  types={'Traditional Cache'}, difficulties=NOT_1HALF_DIFF, terrains={'2.5','3.0','3.5','4.0','4.5','5.0'} },
+  -- Non-traditional buckets
+  { label="Not trad, all D, T1",   types=NON_TRAD, difficulties=ALL_DIFF, terrains={'1.0'} },
+  { label="Not trad, all D, T1½",  types=NON_TRAD, difficulties=ALL_DIFF, terrains={'1.5'} },
+  { label="Not trad, all D, T>1½", types=NON_TRAD, difficulties=ALL_DIFF, terrains={'2.0','2.5','3.0','3.5','4.0','4.5','5.0'} },
+}
 
-numberOfReceivedCaches = 0
-for _, cache in ipairs(countyCaches) do
-  numberOfReceivedCaches = numberOfReceivedCaches + 1
-end
-PGC.print("Trad, D1½, T1: ", numberOfReceivedCaches, "\n")
-if numberOfReceivedCaches >= 1000 then
-  PGC.print("getCaches got into saturation (> 1000 caches)\n")
-  checkerFail = true
-end
-
-for _, cache in ipairs(countyCaches) do
-  local lat = tonumber(cache.latitude)
-  local lon = tonumber(cache.longitude)
-
-  for _, polyname in pairs(polynames) do
-    local poly = polygons[polyname]
-    local bboxok = lat ~= nil and lon ~= nil and
-                   lat >= poly.bbox.min[1] and lat <= poly.bbox.max[1] and
-                   lon >= poly.bbox.min[2] and lon <= poly.bbox.max[2]
-
-    if (not IsExcludedCache(cache.gccode)) and bboxok and IsInsidePoly(lat, lon, poly) then
-	 if not seen[cache.gccode] then 
-		seen[cache.gccode] = true
-                table.insert(polyCaches, cache) -- only appended to the end
-                activeCachesInPolygon = activeCachesInPolygon + 1
-         end
+-- Fetch one bucket, check saturation, insert matching polygon caches
+local function fetchAndInsert(query)
+  local results = PGC.GetOldestCaches({
+    limit = 1000,
+    dontCountArchivedTowardsLimit = true,
+    dontCountDisabledTowardsLimit = true,
+    filter = {
+      country      = conf.country,
+      region       = conf.region,
+      county       = conf.county,
+      types        = query.types,
+      difficulties = query.difficulties,
+      terrains     = query.terrains,
+      minHiddenDate = query.minHiddenDate,  -- nil if not set, uses API default
+      excludeDisabled = true,
+      excludeArchived = true,
+    }
+  })
+  local count = #results
+  PGC.print(query.label, ": ", count, "\n")
+  if count >= 1000 then
+    PGC.print("getCaches got into saturation (> 1000 caches)\n")
+    checkerFail = true
+  end
+  for _, cache in ipairs(results) do
+    local lat = tonumber(cache.latitude)
+    local lon = tonumber(cache.longitude)
+    local poly = isInPolygon(lat, lon)
+    if poly and (not IsExcludedCache(cache.gccode, cache.type, cache.cache_name)) then
+      if not seen[cache.gccode] then
+        seen[cache.gccode] = true
+        table.insert(polyCaches, cache)
+        activeCachesInPolygon = activeCachesInPolygon + 1
+      end
     end
   end
 end
---Trad	1½	1½	958 (2026-02-27)
--- This is the one that will break next.
-countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit = true, dontCountDisabledTowardsLimit = true,
-                                   filter = {
-                                             country = conf.country,
-                                             region = conf.region,
-                                             county = conf.county,
-                                             types = {'Traditional Cache'},
-                                             difficulties = {'1.5'},
-                                             terrains = {'1.5'},
-                                             excludeDisabled = true, excludeArchived = true}})
 
-numberOfReceivedCaches = 0
-for _, cache in ipairs(countyCaches) do
-  numberOfReceivedCaches = numberOfReceivedCaches + 1
-end
-PGC.print("Trad, D1½, T1½: ", numberOfReceivedCaches, "\n")
-if numberOfReceivedCaches >= 1000 then
-  PGC.print("getCaches got into saturation (> 1000 caches)\n")
-  checkerFail = true
-end
---Trad	1½	T>1½	546 (2026-02-27)
-countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit = true, dontCountDisabledTowardsLimit = true,
-                                   filter = {
-                                             country = conf.country,
-                                             region = conf.region,
-                                             county = conf.county,
-                                             types = {'Traditional Cache'},
-                                             difficulties = {'1.5'},
-                                             terrains = {'2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
-                                             excludeDisabled = true, excludeArchived = true}})
-
-numberOfReceivedCaches = 0
-for _, cache in ipairs(countyCaches) do
-  numberOfReceivedCaches = numberOfReceivedCaches + 1
-end
-PGC.print("Trad, D1½, T>1½: ", numberOfReceivedCaches, "\n")
-if numberOfReceivedCaches >= 1000 then
-  PGC.print("getCaches got into saturation (> 1000 caches)\n")
-  checkerFail = true
-end
-
-for _, cache in ipairs(countyCaches) do
-  local lat = tonumber(cache.latitude)
-  local lon = tonumber(cache.longitude)
-
-  for _, polyname in pairs(polynames) do
-    local poly = polygons[polyname]
-    local bboxok = lat ~= nil and lon ~= nil and
-                   lat >= poly.bbox.min[1] and lat <= poly.bbox.max[1] and
-                   lon >= poly.bbox.min[2] and lon <= poly.bbox.max[2]
-
-    if (not IsExcludedCache(cache.gccode)) and bboxok and IsInsidePoly(lat, lon, poly) then
-	 if not seen[cache.gccode] then 
-		seen[cache.gccode] = true
-                table.insert(polyCaches, cache) -- only appended to the end
-                activeCachesInPolygon = activeCachesInPolygon + 1
-         end
-    end
-  end
-end
---Trad	!1½	1	201 (2026-02-27)
-countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit = true, dontCountDisabledTowardsLimit = true,
-                                   filter = {
-                                             country = conf.country,
-                                             region = conf.region,
-                                             county = conf.county,
-                                             types = {'Traditional Cache'},
-                                             difficulties = {'1.0', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
-                                             terrains = {'1.0'},
-                                             excludeDisabled = true, excludeArchived = true}})
-
-numberOfReceivedCaches = 0
-for _, cache in ipairs(countyCaches) do
-  numberOfReceivedCaches = numberOfReceivedCaches + 1
-end
-PGC.print("Trad, !D1½, T1: ", numberOfReceivedCaches, "\n")
-if numberOfReceivedCaches >= 1000 then
-  PGC.print("getCaches got into saturation (> 1000 caches)\n")
-  checkerFail = true
-end
-
-for _, cache in ipairs(countyCaches) do
-  local lat = tonumber(cache.latitude)
-  local lon = tonumber(cache.longitude)
-
-  for _, polyname in pairs(polynames) do
-    local poly = polygons[polyname]
-    local bboxok = lat ~= nil and lon ~= nil and
-                   lat >= poly.bbox.min[1] and lat <= poly.bbox.max[1] and
-                   lon >= poly.bbox.min[2] and lon <= poly.bbox.max[2]
-
-    if (not IsExcludedCache(cache.gccode)) and bboxok and IsInsidePoly(lat, lon, poly) then
-	 if not seen[cache.gccode] then 
-		seen[cache.gccode] = true
-                table.insert(polyCaches, cache) -- only appended to the end
-                activeCachesInPolygon = activeCachesInPolygon + 1
-         end
-    end
-  end
-end
---Trad	!1½	1½	841 (2026-02-27)
-countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit = true, dontCountDisabledTowardsLimit = true,
-                                   filter = {
-                                             country = conf.country,
-                                             region = conf.region,
-                                             county = conf.county,
-                                             types = {'Traditional Cache'},
-                                             difficulties = {'1.0', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
-                                             terrains = {'1.5'},
-                                             excludeDisabled = true, excludeArchived = true}})
-
-numberOfReceivedCaches = 0
-for _, cache in ipairs(countyCaches) do
-  numberOfReceivedCaches = numberOfReceivedCaches + 1
-end
-PGC.print("Trad, !D1½, T1½: ", numberOfReceivedCaches, "\n")
-if numberOfReceivedCaches >= 1000 then
-  PGC.print("getCaches got into saturation (> 1000 caches)\n")
-  checkerFail = true
-end
-
-for _, cache in ipairs(countyCaches) do
-  local lat = tonumber(cache.latitude)
-  local lon = tonumber(cache.longitude)
-
-  for _, polyname in pairs(polynames) do
-    local poly = polygons[polyname]
-    local bboxok = lat ~= nil and lon ~= nil and
-                   lat >= poly.bbox.min[1] and lat <= poly.bbox.max[1] and
-                   lon >= poly.bbox.min[2] and lon <= poly.bbox.max[2]
-
-    if (not IsExcludedCache(cache.gccode)) and bboxok and IsInsidePoly(lat, lon, poly) then
-	 if not seen[cache.gccode] then 
-		seen[cache.gccode] = true
-                table.insert(polyCaches, cache) -- only appended to the end
-                activeCachesInPolygon = activeCachesInPolygon + 1
-         end
-    end
-  end
-end
---Trad	!1½	2	421 (2026-02-27)
-countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit = true, dontCountDisabledTowardsLimit = true,
-                                   filter = {
-                                             country = conf.country,
-                                             region = conf.region,
-                                             county = conf.county,
-                                             types = {'Traditional Cache'},
-                                             difficulties = {'1.0', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
-                                             terrains = {'2.0'},
-                                             excludeDisabled = true, excludeArchived = true}})
-
-numberOfReceivedCaches = 0
-for _, cache in ipairs(countyCaches) do
-  numberOfReceivedCaches = numberOfReceivedCaches + 1
-end
-PGC.print("Trad, !D1½, T2: ", numberOfReceivedCaches, "\n")
-if numberOfReceivedCaches >= 1000 then
-  PGC.print("getCaches got into saturation (> 1000 caches)\n")
-  checkerFail = true
-end
-
-for _, cache in ipairs(countyCaches) do
-  local lat = tonumber(cache.latitude)
-  local lon = tonumber(cache.longitude)
-
-  for _, polyname in pairs(polynames) do
-    local poly = polygons[polyname]
-    local bboxok = lat ~= nil and lon ~= nil and
-                   lat >= poly.bbox.min[1] and lat <= poly.bbox.max[1] and
-                   lon >= poly.bbox.min[2] and lon <= poly.bbox.max[2]
-
-    if (not IsExcludedCache(cache.gccode)) and bboxok and IsInsidePoly(lat, lon, poly) then
-	 if not seen[cache.gccode] then 
-		seen[cache.gccode] = true
-                table.insert(polyCaches, cache) -- only appended to the end
-                activeCachesInPolygon = activeCachesInPolygon + 1
-         end
-    end
-  end
-end
---Trad	!1½	T>2	751 (2026-02-27)
-countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit = true, dontCountDisabledTowardsLimit = true,
-                                   filter = {
-                                             country = conf.country,
-                                             region = conf.region,
-                                             county = conf.county,
-                                             types = {'Traditional Cache'},
-                                             difficulties = {'1.0', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
-                                             terrains = {'2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
-                                             excludeDisabled = true, excludeArchived = true}})
-
-numberOfReceivedCaches = 0
-for _, cache in ipairs(countyCaches) do
-  numberOfReceivedCaches = numberOfReceivedCaches + 1
-end
-PGC.print("Trad, !D1½, T>2: ", numberOfReceivedCaches, "\n")
-if numberOfReceivedCaches >= 1000 then
-  PGC.print("getCaches got into saturation (> 1000 caches)\n")
-  checkerFail = true
-end
-
-for _, cache in ipairs(countyCaches) do
-  local lat = tonumber(cache.latitude)
-  local lon = tonumber(cache.longitude)
-
-  for _, polyname in pairs(polynames) do
-    local poly = polygons[polyname]
-    local bboxok = lat ~= nil and lon ~= nil and
-                   lat >= poly.bbox.min[1] and lat <= poly.bbox.max[1] and
-                   lon >= poly.bbox.min[2] and lon <= poly.bbox.max[2]
-
-    if (not IsExcludedCache(cache.gccode)) and bboxok and IsInsidePoly(lat, lon, poly) then
-	 if not seen[cache.gccode] then 
-		seen[cache.gccode] = true
-                table.insert(polyCaches, cache) -- only appended to the end
-                activeCachesInPolygon = activeCachesInPolygon + 1
-         end
-    end
-  end
-end
---Not trad	all	1	215 (2026-02-27)
-countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit = true, dontCountDisabledTowardsLimit = true,
-                                   filter = {
-                                             country = conf.country,
-                                             region = conf.region,
-                                             county = conf.county,
-                                             types = {'Multi-cache', 'Virtual Cache', 'Letterbox Hybrid', 'Unknown Cache', 'Project APE Cache', 'Webcam Cache', 'Earthcache', 'Wherigo Cache'},
-                                             difficulties = {'1.0', '1.5', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
-                                             terrains = {'1.0'},
-                                             excludeDisabled = true, excludeArchived = true}})
-
-numberOfReceivedCaches = 0
-for _, cache in ipairs(countyCaches) do
-  numberOfReceivedCaches = numberOfReceivedCaches + 1
-end
-PGC.print("Not trad, all D, T1: ", numberOfReceivedCaches, "\n")
-if numberOfReceivedCaches >= 1000 then
-  PGC.print("getCaches nontraditional got into saturation (> 1000 caches)\n")
-  checkerFail = true
-end
-
-for _, cache in ipairs(countyCaches) do
-  local lat = tonumber(cache.latitude)
-  local lon = tonumber(cache.longitude)
-  
-  for _, polyname in pairs(polynames) do
-    local poly = polygons[polyname]
-    local bboxok = lat ~= nil and lon ~= nil and
-                   lat >= poly.bbox.min[1] and lat <= poly.bbox.max[1] and
-                   lon >= poly.bbox.min[2] and lon <= poly.bbox.max[2]
-
-    if (not IsExcludedCache(cache.gccode)) and bboxok and IsInsidePoly(lat, lon, poly) then
-	 if not seen[cache.gccode] then 
-		seen[cache.gccode] = true
-                table.insert(polyCaches, cache) -- only appended to the end
-                activeCachesInPolygon = activeCachesInPolygon + 1
-         end
-    end
-  end
-end
---Not trad	all	1½	740 (2026-02-27)
-countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit = true, dontCountDisabledTowardsLimit = true,
-                                   filter = {
-                                             country = conf.country,
-                                             region = conf.region,
-                                             county = conf.county,
-                                             types = {'Multi-cache', 'Virtual Cache', 'Letterbox Hybrid', 'Unknown Cache', 'Project APE Cache', 'Webcam Cache', 'Earthcache', 'Wherigo Cache'},
-                                             difficulties = {'1.0', '1.5', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
-                                             terrains = {'1.5'},
-                                             excludeDisabled = true, excludeArchived = true}})
-
-numberOfReceivedCaches = 0
-for _, cache in ipairs(countyCaches) do
-  numberOfReceivedCaches = numberOfReceivedCaches + 1
-end
-PGC.print("Not trad, all D, T1½: ", numberOfReceivedCaches, "\n")
-if numberOfReceivedCaches >= 1000 then
-  PGC.print("getCaches nontraditional got into saturation (> 1000 caches)\n")
-  checkerFail = true
-end
-
-for _, cache in ipairs(countyCaches) do
-  local lat = tonumber(cache.latitude)
-  local lon = tonumber(cache.longitude)
-  
-  for _, polyname in pairs(polynames) do
-    local poly = polygons[polyname]
-    local bboxok = lat ~= nil and lon ~= nil and
-                   lat >= poly.bbox.min[1] and lat <= poly.bbox.max[1] and
-                   lon >= poly.bbox.min[2] and lon <= poly.bbox.max[2]
-
-    if (not IsExcludedCache(cache.gccode)) and bboxok and IsInsidePoly(lat, lon, poly) then
-	 if not seen[cache.gccode] then 
-		seen[cache.gccode] = true
-                table.insert(polyCaches, cache) -- only appended to the end
-                activeCachesInPolygon = activeCachesInPolygon + 1
-         end
-    end
-  end
-end
---Not trad	all	T>1½	809 (2026-02-27)
-countyCaches = PGC.GetOldestCaches({limit = 1000, dontCountArchivedTowardsLimit = true, dontCountDisabledTowardsLimit = true,
-                                   filter = {
-                                             country = conf.country,
-                                             region = conf.region,
-                                             county = conf.county,
-                                             types = {'Multi-cache', 'Virtual Cache', 'Letterbox Hybrid', 'Unknown Cache', 'Project APE Cache', 'Webcam Cache', 'Earthcache', 'Wherigo Cache'},
-                                             difficulties = {'1.0', '1.5', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
-                                             terrains = {'2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'},
-                                             excludeDisabled = true, excludeArchived = true}})
-
-numberOfReceivedCaches = 0
-for _, cache in ipairs(countyCaches) do
-  numberOfReceivedCaches = numberOfReceivedCaches + 1
-end
-PGC.print("Not trad, all D, T>1½: ", numberOfReceivedCaches, "\n")
-if numberOfReceivedCaches >= 1000 then
-  PGC.print("getCaches got into saturation (> 1000 caches)\n")
-  checkerFail = true
-end
-
-for _, cache in ipairs(countyCaches) do
-  local lat = tonumber(cache.latitude)
-  local lon = tonumber(cache.longitude)
-
-  for _, polyname in pairs(polynames) do
-    local poly = polygons[polyname]
-    local bboxok = lat ~= nil and lon ~= nil and
-                   lat >= poly.bbox.min[1] and lat <= poly.bbox.max[1] and
-                   lon >= poly.bbox.min[2] and lon <= poly.bbox.max[2]
-
-    if (not IsExcludedCache(cache.gccode)) and bboxok and IsInsidePoly(lat, lon, poly) then
-	 if not seen[cache.gccode] then 
-		seen[cache.gccode] = true
-                table.insert(polyCaches, cache) -- only appended to the end
-                activeCachesInPolygon = activeCachesInPolygon + 1
-         end
-    end
-  end
+for _, query in ipairs(cacheQueries) do
+  fetchAndInsert(query)
 end
 
 PGC.print("activeCachesInPolygon: ", activeCachesInPolygon, "\n")
@@ -679,20 +386,6 @@ local finds = PGC.GetFinds(profileId,
 
 -- inserting owned caches to finds
 if conf.owned then
-  function binarysearch(table, field, value)
-    -- find the lowest position from ordered list
-    local bot = 1
-    local top = #table
-    while bot <= top do
-      local mid = math.floor((bot+top)/2)
-      if table[mid][field] < value then
-        bot = mid+1
-      else
-        top = mid-1
-      end
-    end
-    return bot
-  end
   for _,cache in ipairs(finds) do finds[cache.gccode] = cache end --create cache index
   conf.owned = {}
   if conf.cachetypes then conf.owned.type = conf.cachetypes end
@@ -731,14 +424,9 @@ if conf.owned then
     if cache.owned then
       local lat = tonumber(cache.latitude)
       local lon = tonumber(cache.longitude)
-      for _, polyname in pairs(polynames) do
-        local poly = polygons[polyname]
-        local bboxok = lat ~= nil and lon ~= nil and
-                       lat >= poly.bbox.min[1] and lat <= poly.bbox.max[1] and
-                       lon >= poly.bbox.min[2] and lon <= poly.bbox.max[2]
-        if bboxok and IsInsidePoly(lat, lon, poly) then
-          countOwned = countOwned + 1
-        end
+      if isInPolygon(lat, lon) then
+        countOwned = countOwned + 1
+        PGC.print("  OWNED: ", cache.gccode, " ", cache.cache_name, "\n")
       end
     end
   end
@@ -748,7 +436,6 @@ end
 
 
 --PGC.print("Loaded "..#finds.." caches from database")
-local lastqualifying = nil
 local types = {}
 local nonTraditional = 0
 local archivedFinds = 0
@@ -761,28 +448,21 @@ for _, cache in ipairs(finds) do
   -- owned caches never count toward finds (owner cannot find their own cache)
   if (not cache.owned) then
     local cachetypeok = excludedtypes[cache.type] == nil
-    if cachetypeok and lat ~= nil and lon ~= nil then
-      for _, polyname in pairs(polynames) do
-        local poly = polygons[polyname]
-        local bboxok = lat >= poly.bbox.min[1] and lat <= poly.bbox.max[1] and
-                       lon >= poly.bbox.min[2] and lon <= poly.bbox.max[2]
-
-        if (not IsExcludedCache(cache.gccode)) and bboxok and IsInsidePoly(lat, lon, poly) then
-          if cache.archived == "1" then
-            -- count archived finds separately for historical reference
-            archivedFinds = archivedFinds + 1
-          elseif cache.disabled == "1" then
-            -- track disabled caches in polygon for debug, but do not count toward qualification
-            table.insert(disabledInPolygon, cache)
-          else
-            -- only active finds count toward qualification
-            poly.counter = poly.counter + 1
-            table.insert(poly.caches, cache)
-            types[cache.type] = (types[cache.type] or 0) + 1
-            if cache.type ~= "Traditional Cache" then
-              nonTraditional = nonTraditional + 1
-            end
-          end
+    local poly = cachetypeok and isInPolygon(lat, lon)
+    if poly and (not IsExcludedCache(cache.gccode, cache.type, cache.cache_name)) then
+      if cache.archived == "1" then
+        -- count archived finds separately for historical reference
+        archivedFinds = archivedFinds + 1
+      elseif cache.disabled == "1" then
+        -- track disabled caches in polygon for debug, but do not count toward qualification
+        table.insert(disabledInPolygon, cache)
+      else
+        -- only active finds count toward qualification
+        poly.counter = poly.counter + 1
+        table.insert(poly.caches, cache)
+        types[cache.type] = (types[cache.type] or 0) + 1
+        if cache.type ~= "Traditional Cache" then
+          nonTraditional = nonTraditional + 1
         end
       end
     end
@@ -864,11 +544,11 @@ end
 -- list caches still missing to be found
 local codes = {}
 for _, cache in ipairs(polyCaches) do
-  code = cache['gccode']
+  local code = cache['gccode']
   codes[code] = 1
 end
 for _, cache in ipairs(finds) do
-  code = cache['gccode']
+  local code = cache['gccode']
   if codes[code] == 1 and not cache.owned then  -- owned caches cannot be found by their owner
     codes[code] = 0
   end
@@ -879,7 +559,7 @@ codes["GC1M0D0"] = 0 --GC1M0D0 Bellevue Blackout
 -- build remaining list and count
 local remainingCaches = {}
 for _, cache in ipairs(polyCaches) do
-  code = cache['gccode']
+  local code = cache['gccode']
   if codes[code] == 1 then
     table.insert(remainingCaches, cache)
   end
@@ -898,7 +578,7 @@ local ok = qualifyingFinds >= required and #typesFound >= minTypes and nonTradit
 if conf.friendlyName then
   table.insert(logtable, 1, "I have found "..qualifyingFinds.." caches in "..conf.friendlyName.." ("..required.." required), plus "..archivedFinds.." found caches that are now archived")
 else
-  table.insert(logtable, 1, "Profile have found "..qualifyingFinds.." caches in the designated area ("..required.." required), plus "..archivedFinds.." found caches that are now archived")
+  table.insert(logtable, 1, profileName.." has found "..qualifyingFinds.." caches in the designated area ("..required.." required), plus "..archivedFinds.." found caches that are now archived")
 end
 
 -- map shows remaining caches if any, otherwise shows all found caches
