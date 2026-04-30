@@ -4,7 +4,7 @@ Plots a GSAK GPX export on an interactive browser map. Caches are grouped by typ
 
 > County lookup requires `gsak_counties.db` — build it once with `gsak_counties.py build`. Without the DB, caches without a county field in the GPX will simply have no county assigned.
 
-<img src="D:\dev\Geocaching\Czechia_Example.jpg" alt="Czechia_Example" style="zoom:50%;" />
+<img src="Czechia_Example.jpg" alt="Czechia_Example" style="zoom:50%;" />
 
 ### Quick Start
 
@@ -195,7 +195,7 @@ Simplification uses the Ramer-Douglas-Peucker algorithm. At county zoom levels, 
 
 The generated file uses the same property schema as the previous Census-derived file (`adif_key`, `namelsad`, `state`, `name`) — it is a drop-in replacement with no changes required to `map_core.py` or `adif_map.py`.
 
-![usa_example](D:\dev\Geocaching\usa_example.jpg)
+![usa_example](usa_example.jpg)
 
 ## `PGC_GC1M0DO.lua`
 
