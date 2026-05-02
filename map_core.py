@@ -18,7 +18,7 @@ Dependencies:
 
 from pathlib import Path
 
-__version__ = "1.4.3"  # fix Canadian county routing (_is_us_ca uses US-only codes); add cache_types to THEME_DEFAULTS/load_theme(); expose CACHE_TYPE_COLORS global
+__version__ = "1.4.5"  # map.cfg optional tile keys (Thunderforest, Stadia); OSM added; NatGeo default; verbose tile summary
 
 try:
     import yaml
@@ -86,9 +86,12 @@ THEME_DEFAULTS: dict = {
             "unworked_opacity": 0.0,
         },
         "grids": {
-            "confirmed":   "#27ae9e",
-            "worked":      "#e8a020",
-            "fill_opacity": 0.45,
+            "confirmed":        "#27ae9e",
+            "worked":           "#e8a020",
+            "fill_opacity":     0.45,
+            "unworked_fill":    "#ffffff",
+            "unworked_border":  "#888888",
+            "unworked_weight":  0.8,
         },
     },
     "cache_types": {
@@ -188,31 +191,145 @@ def load_theme(theme_path=None, script_dir: Path = None) -> None:
 # Base map construction
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Optional tile provider config  (map.cfg beside this script)
+# ---------------------------------------------------------------------------
+
+_MAP_CFG_PATH = Path(__file__).parent / "map.cfg"
+_map_cfg_cache: dict | None = None
+
+
+def _load_map_cfg() -> dict:
+    """
+    Load map.cfg into a {provider_name: api_key} dict on first call; cache result.
+    Format: one entry per line —  provider : apikey  — '#' lines ignored.
+    Returns empty dict if file is absent (normal — no warning).
+    """
+    global _map_cfg_cache
+    if _map_cfg_cache is not None:
+        return _map_cfg_cache
+
+    cfg: dict = {}
+    if _MAP_CFG_PATH.exists():
+        for line in _MAP_CFG_PATH.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if ":" in line:
+                key, _, val = line.partition(":")
+                k, v = key.strip().lower(), val.strip()
+                if k and v:
+                    cfg[k] = v
+    _map_cfg_cache = cfg
+    return cfg
+
+
+# ---------------------------------------------------------------------------
+# Base map construction
+# ---------------------------------------------------------------------------
+
+# Thunderforest tile styles (all use the same API key)
+_THUNDERFOREST_STYLES = [
+    ("outdoors",     "Thunderforest Outdoors"),
+    ("landscape",    "Thunderforest Landscape"),
+    ("cycle",        "Thunderforest Cycle"),
+]
+
+# Stadia tile styles (all use the same API key)
+_STADIA_STYLES = [
+    ("alidade_smooth",      "Stadia Smooth"),
+    ("alidade_smooth_dark", "Stadia Smooth Dark"),
+    ("stamen_toner",        "Stadia Toner"),
+    ("stamen_terrain",      "Stadia Terrain"),
+]
+
+
 def build_base_map(center_lat: float, center_lon: float,
-                   zoom_start: int = 3) -> folium.Map:
+                   zoom_start: int = 3,
+                   verbose: bool = False) -> folium.Map:
     """
     Create a folium Map with all standard tile layers and no initial tile.
     Applies MAP_LON_OFFSET to the initial center longitude.
+
+    Always-available layers (no key required):
+        CartoDB Light, CartoDB Dark, Esri Topo, Esri Satellite,
+        Esri NatGeo (default — added last)
+
+    Optional layers loaded from map.cfg if API keys are present:
+        thunderforest : <key>  -> Thunderforest Outdoors / Landscape / Cycle
+        stadia        : <key>  -> Stadia Smooth / Dark / Toner / Terrain
+
+    If verbose=True, prints a summary of loaded tile layers.
     """
     m = folium.Map(
         location=(center_lat, center_lon + MAP_LON_OFFSET),
         zoom_start=zoom_start,
         tiles=None,
     )
+
+    cfg = _load_map_cfg()
+    added: list[str] = []
+
+    # ── Always-available layers ────────────────────────────────────────────
     folium.TileLayer("CartoDB positron",    name="CartoDB Light").add_to(m)
     folium.TileLayer("CartoDB dark_matter", name="CartoDB Dark").add_to(m)
+    added += ["CartoDB Light", "CartoDB Dark"]
+
     folium.TileLayer(
         tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
         attr="Esri", name="Esri Topo",
     ).add_to(m)
     folium.TileLayer(
-        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}",
-        attr="Esri / National Geographic", name="Esri NatGeo",
-    ).add_to(m)
-    folium.TileLayer(
         tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
         attr="Esri", name="Esri Satellite",
     ).add_to(m)
+    added += ["Esri Topo", "Esri Satellite"]
+
+    # ── Optional: Thunderforest ────────────────────────────────────────────
+    tf_key = cfg.get("thunderforest", "")
+    if tf_key:
+        tf_added = []
+        for style, label in _THUNDERFOREST_STYLES:
+            folium.TileLayer(
+                tiles=(f"https://tile.thunderforest.com/{style}/{{z}}/{{x}}/{{y}}.png"
+                       f"?apikey={tf_key}"),
+                attr='&copy; <a href="https://www.thunderforest.com/">Thunderforest</a>,'
+                     ' &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+                name=label,
+            ).add_to(m)
+            tf_added.append(label)
+        added += tf_added
+
+    # ── Optional: Stadia ───────────────────────────────────────────────────
+    stadia_key = cfg.get("stadia", "")
+    if stadia_key:
+        st_added = []
+        for style, label in _STADIA_STYLES:
+            folium.TileLayer(
+                tiles=(f"https://tiles.stadiamaps.com/tiles/{style}/{{z}}/{{x}}/{{y}}.png"
+                       f"?api_key={stadia_key}"),
+                attr='&copy; <a href="https://stadiamaps.com/">Stadia Maps</a>,'
+                     ' &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+                name=label,
+            ).add_to(m)
+            st_added.append(label)
+        added += st_added
+
+    # ── Esri NatGeo — added last so it is the default visible layer ────────
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}",
+        attr="Esri / National Geographic", name="Esri NatGeo",
+    ).add_to(m)
+    added.append("Esri NatGeo")
+
+    if verbose:
+        always_n   = 5  # CartoDB×2, Esri Topo, Esri Satellite, NatGeo
+        optional_n = len(added) - always_n
+        opt_note   = (f" + {optional_n} from map.cfg"
+                      f" ({', '.join(a for a in added[always_n:])})"
+                      if optional_n else " (no map.cfg optional layers)")
+        print(f"  Tile layers: {always_n} standard{opt_note}")
+
     return m
 
 
@@ -398,14 +515,97 @@ def _style_for_status(status: str | None, cfg: dict) -> dict:
 # Grid square choropleth
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Land-grid whitelist (used by build_grid_overlay in overlays_only mode)
+# ---------------------------------------------------------------------------
+
+_LAND_GRIDS_PATH = Path(__file__).parent / "land_grids.txt"
+_land_grids_cache: frozenset | None = None   # None = not yet loaded
+_LAND_GRIDS_MISSING = object()               # sentinel: file absent, fallback mode
+
+
+def _load_land_grids() -> frozenset | None:
+    """
+    Load land_grids.txt into a frozenset on first call; cache result.
+
+    Returns a frozenset of grid4 strings if the file exists.
+    Returns None if the file is missing — callers should fall back to
+    the full bounding-box ghost set (no land filtering).
+    Prints a warning once on first miss.
+    Subsequent calls return the cached result without re-reading disk.
+    """
+    global _land_grids_cache
+    if _land_grids_cache is _LAND_GRIDS_MISSING:
+        return None
+    if _land_grids_cache is not None:
+        return _land_grids_cache
+
+    if not _LAND_GRIDS_PATH.exists():
+        print(
+            f"  Note: land_grids.txt not found — ghost cells will use full bounding-box\n"
+            f"    (run  python build_land_grids.py  once to enable land-only filtering)"
+        )
+        _land_grids_cache = _LAND_GRIDS_MISSING
+        return None
+
+    grids = set()
+    for line in _LAND_GRIDS_PATH.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith('#') and len(line) == 4:
+            grids.add(line.upper())
+
+    _land_grids_cache = frozenset(grids)
+    print(f"  Land grid whitelist: {len(_land_grids_cache):,} grids loaded "
+          f"from {_LAND_GRIDS_PATH.name}")
+    return _land_grids_cache
+
+
+def _all_grid4_in_bbox(lat_min: float, lat_max: float,
+                       lon_min: float, lon_max: float) -> list:
+    """
+    Return all valid 4-char Maidenhead grid squares whose SW corner falls
+    within the given lat/lon bounding box (degrees).
+
+    Grid cell size: 2° lon × 1° lat.
+    """
+    results = []
+    lat_min = max(lat_min, -90.0)
+    lat_max = min(lat_max,  89.0)
+    lon_min = max(lon_min, -180.0)
+    lon_max = min(lon_max,  178.0)
+
+    col_start = int((lon_min + 180) / 2)
+    col_end   = int((lon_max + 180) / 2)
+    row_start = int((lat_min +  90) / 1)
+    row_end   = int((lat_max +  90) / 1)
+
+    for col in range(col_start, col_end + 1):
+        field_col = col // 10
+        sq_col    = col  % 10
+        for row in range(row_start, row_end + 1):
+            field_row = row // 10
+            sq_row    = row  % 10
+            grid = (chr(ord('A') + field_col) +
+                    chr(ord('A') + field_row) +
+                    str(sq_col) +
+                    str(sq_row))
+            results.append(grid)
+    return results
+
+
 def build_grid_overlay(m: folium.Map, records: list,
                        key_fn=None, dynamic: bool = False,
-                       group_fn=None, band_fn=None) -> dict:
+                       group_fn=None, band_fn=None,
+                       overlays_only: bool = False) -> dict:
     """
     Add a Maidenhead grid-square choropleth layer.
 
     key_fn(record) -> 4-char grid string (default: record['GRIDSQUARE'][:4])
     When dynamic=True, embed per-record data for JS recompute.
+    When overlays_only=True, also render unworked ghost cells (transparent fill,
+    visible border, hoverable tooltip) for land-adjacent grids within the bounding
+    box of worked grids ± 1-cell padding.  Requires land_grids.txt (generated by
+    build_land_grids.py); if absent, ghost cells are skipped with a warning.
     """
     def _default_key(r):
         g = r.get('GRIDSQUARE', '')[:4].upper()
@@ -413,13 +613,44 @@ def build_grid_overlay(m: folium.Map, records: list,
 
     kfn = key_fn or _default_key
 
-    # Tag confirmed flag onto records for classify_records
     status, counts, conf_counts, work_counts = classify_records(records, kfn)
     if not status:
         print("  Grid overlay: no grid data found — skipping.")
         return {}
 
+    # ------------------------------------------------------------------
+    # Ghost (unworked) cells — only in overlays_only mode
+    # ------------------------------------------------------------------
+    ghost_grids: set = set()
+    if overlays_only and status:
+        land_grids = _load_land_grids()
+        if land_grids is not None:
+            # Bounding box of worked grid SW corners + 1-cell pad
+            worked_lons, worked_lats = [], []
+            for grid in status:
+                try:
+                    ring = grid4_polygon(grid)
+                    worked_lons.append(ring[0][0])
+                    worked_lats.append(ring[0][1])
+                except Exception:
+                    pass
+            if worked_lons:
+                lon_min = min(worked_lons) - 2
+                lon_max = max(worked_lons) + 2
+                lat_min = min(worked_lats) - 1
+                lat_max = max(worked_lats) + 1
+                candidates = set(_all_grid4_in_bbox(lat_min, lat_max,
+                                                    lon_min, lon_max))
+                unworked = candidates - set(status.keys())
+                if land_grids is not None:
+                    # Filter to land-adjacent grids only
+                    ghost_grids = unworked & land_grids
+                else:
+                    # land_grids.txt missing — fall back to full bounding box
+                    ghost_grids = unworked
+
     features = []
+    # Worked / confirmed cells
     for grid, state in status.items():
         try:
             ring = grid4_polygon(grid)
@@ -437,9 +668,33 @@ def build_grid_overlay(m: folium.Map, records: list,
             'geometry': {'type': 'Polygon', 'coordinates': [ring]},
         })
 
+    # Ghost (unworked) cells
+    for grid in sorted(ghost_grids):
+        try:
+            ring = grid4_polygon(grid)
+        except Exception:
+            continue
+        features.append({
+            'type': 'Feature',
+            'properties': {
+                'grid': grid, 'key': grid, 'status': None,
+                'count': 0, 'tooltip': grid,
+            },
+            'geometry': {'type': 'Polygon', 'coordinates': [ring]},
+        })
+
     geojson = {'type': 'FeatureCollection', 'features': features}
+
     def style_fn(feature):
-        return _style_for_status(feature['properties']['status'], GRIDS_COLORS)
+        st = feature['properties']['status']
+        if st is None:
+            return {
+                'fillColor':   GRIDS_COLORS.get('unworked_fill',   '#ffffff'),
+                'color':       GRIDS_COLORS.get('unworked_border', '#888888'),
+                'weight':      GRIDS_COLORS.get('unworked_weight', 0.8),
+                'fillOpacity': 0.0,
+            }
+        return _style_for_status(st, GRIDS_COLORS)
 
     fg  = folium.FeatureGroup(name='Overlay: Grid squares', show=True)
     gjl = folium.GeoJson(
@@ -452,7 +707,9 @@ def build_grid_overlay(m: folium.Map, records: list,
 
     confirmed_n = sum(1 for s in status.values() if s == 'confirmed')
     worked_n    = sum(1 for s in status.values() if s == 'worked')
-    print(f"  Grid overlay: {confirmed_n} confirmed, {worked_n} worked-only squares.")
+    ghost_n     = len(ghost_grids)
+    ghost_note  = f", {ghost_n} unworked ghost cells" if ghost_n else ""
+    print(f"  Grid overlay: {confirmed_n} confirmed, {worked_n} worked-only squares{ghost_note}.")
     _add_state_borders(m)
 
     if dynamic and group_fn and band_fn:
@@ -618,13 +875,16 @@ def build_states_overlay(m: folium.Map, records: list,
                          us_key_fn=None, ca_key_fn=None,
                          dynamic: bool = False,
                          group_fn=None, band_fn=None,
-                         cache_path: Path = None) -> dict:
+                         cache_path: Path = None,
+                         overlays_only: bool = False) -> dict:
     """
     Add a US states + Canadian provinces choropleth layer.
 
     us_key_fn(record) -> 2-char US state postal code or ''
     ca_key_fn(record) -> 2-char CA province code or ''
     cache_path        : override for ne_states.geojson location
+    overlays_only     : when True, render unworked states with a faint fill
+                        and visible border so they are hoverable
     """
     geo_path = cache_path or _STATES_CACHE
 
@@ -680,7 +940,15 @@ def build_states_overlay(m: folium.Map, records: list,
     def style_fn(feature):
         postal = (feature['properties'].get('postal') or '').upper()
         info   = lookup.get(postal)
-        return _style_for_status(info['status'] if info else None, STATES_COLORS)
+        st     = info['status'] if info else None
+        if st is None and overlays_only:
+            return {
+                'fillColor':   STATES_COLORS.get('unworked_fill',   '#ffffff'),
+                'color':       STATES_COLORS.get('unworked_border', '#666666'),
+                'weight':      STATES_COLORS.get('unworked_weight', 0.8),
+                'fillOpacity': 0.10,
+            }
+        return _style_for_status(st, STATES_COLORS)
 
     fg  = folium.FeatureGroup(name='Overlay: States & Provinces', show=True)
     gjl = folium.GeoJson(
@@ -718,7 +986,8 @@ def build_counties_overlay(m: folium.Map, records: list,
                             dynamic: bool = False,
                             group_fn=None, band_fn=None,
                             cache_path: Path = None,
-                            db_path=None) -> dict:
+                            db_path=None,
+                            overlays_only: bool = False) -> dict:
     """
     Add a county/district choropleth layer for US, CA, and international regions.
 
@@ -728,6 +997,8 @@ def build_counties_overlay(m: folium.Map, records: list,
                      Keys whose state_code is not a US/CA postal code are looked
                      up in the DB counties table and merged into one layer.
                      If None, only US/CA GeoJSON keys are rendered.
+    overlays_only  : when True, render unworked counties with a visible border
+                     (transparent fill) so they are hoverable
     """
     # US-only postal codes — Canadian province codes are intentionally absent
     # so they route to the DB path along with other international regions.
@@ -855,7 +1126,15 @@ def build_counties_overlay(m: folium.Map, records: list,
     def style_fn(feature):
         key  = feature['properties'].get('adif_key', '')
         info = status.get(key)
-        return _style_for_status(info if isinstance(info, str) else None, COUNTIES_COLORS)
+        st   = info if isinstance(info, str) else None
+        if st is None and overlays_only:
+            return {
+                'fillColor':   COUNTIES_COLORS.get('unworked_fill',   '#ffffff'),
+                'color':       COUNTIES_COLORS.get('unworked_border', '#000000'),
+                'weight':      COUNTIES_COLORS.get('unworked_weight', 0.3),
+                'fillOpacity': 0.0,
+            }
+        return _style_for_status(st, COUNTIES_COLORS)
 
     fg  = folium.FeatureGroup(name='Overlay: Counties', show=True)
     gjl = folium.GeoJson(
