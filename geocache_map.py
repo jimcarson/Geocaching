@@ -30,7 +30,7 @@ Options:
     --verbose           Show cache type breakdown and skipped count
 """
 
-__version__ = "1.3.0"  # split _us/_ca codes, _ca_key for provinces; tooltip fix moved to map_core
+__version__ = "1.3.2"  # replace local _CA_PROVINCE_CODES with CA_CODES from location_mapping; import _POSTAL_STATE from location_mapping instead of gsak_counties
 
 import argparse
 import sys
@@ -177,22 +177,47 @@ _NS_GS_ALT = 'http://www.groundspeak.com/cache/1/0/2'
 # Cache type configuration
 # ---------------------------------------------------------------------------
 
-# Display name -> (dot color, short label for filter panel)
-CACHE_TYPE_COLORS: dict = {
-    'Traditional Cache': ('#2ecc71', 'Traditional'),
-    'Mystery Cache':     ('#3498db', 'Mystery'),
-    'Unknown Cache':     ('#3498db', 'Mystery'),      # alias
-    'Multi-cache':       ('#e67e22', 'Multi'),
-    'Earthcache':        ('#8B4513', 'Earth'),
-    'Virtual Cache':     ('#9b59b6', 'Virtual'),
-    'Letterbox Hybrid':  ('#1abc9c', 'Letterbox'),
-    'Wherigo Cache':     ('#16a085', 'Wherigo'),
-    'Cache In Trash Out Event': ('#f39c12', 'CITO'),
-    'Mega-Event Cache':  ('#e74c3c', 'Mega'),
-    'Giga-Event Cache':  ('#c0392b', 'Giga'),
-    'Event Cache':       ('#e74c3c', 'Event'),
+# ---------------------------------------------------------------------------
+# Cache type configuration
+# ---------------------------------------------------------------------------
+
+# Short labels used in the filter panel and layer control.
+# Colors are loaded from theme_default.yaml (cache_types section) via
+# map_core.load_theme() and merged below into CACHE_TYPE_COLORS after
+# theme load.  Edit theme_default.yaml to change dot colors.
+_CACHE_TYPE_LABELS: dict = {
+    'Traditional Cache':        'Traditional',
+    'Mystery Cache':            'Mystery',
+    'Unknown Cache':            'Mystery',      # alias — shares Mystery color
+    'Multi-cache':              'Multi',
+    'Earthcache':               'Earth',
+    'Virtual Cache':            'Virtual',
+    'Letterbox Hybrid':         'Letterbox',
+    'Wherigo Cache':            'Wherigo',
+    'Cache In Trash Out Event': 'CITO',
+    'Mega-Event Cache':         'Mega',
+    'Giga-Event Cache':         'Giga',
+    'Event Cache':              'Event',
 }
-_DEFAULT_CACHE_COLOR = '#888888'
+
+# Populated by _build_cache_type_colors() after load_theme() is called.
+# Structure: {canonical_type_name: (hex_color, short_label)}
+CACHE_TYPE_COLORS:    dict = {}
+_DEFAULT_CACHE_COLOR: str  = '#888888'
+
+
+def _build_cache_type_colors() -> None:
+    """
+    Merge theme colors (map_core.CACHE_TYPE_COLORS) with local labels
+    (_CACHE_TYPE_LABELS) to build the runtime CACHE_TYPE_COLORS dict.
+    Called once after load_theme().
+    """
+    global CACHE_TYPE_COLORS, _DEFAULT_CACHE_COLOR
+    _DEFAULT_CACHE_COLOR = map_core.DEFAULT_CACHE_COLOR
+    CACHE_TYPE_COLORS = {
+        ctype: (map_core.CACHE_TYPE_COLORS.get(ctype, _DEFAULT_CACHE_COLOR), label)
+        for ctype, label in _CACHE_TYPE_LABELS.items()
+    }
 
 # Canonical prefix map for --type matching (lowercase prefix -> canonical name)
 _TYPE_PREFIX_MAP: dict = {
@@ -822,6 +847,7 @@ def main():
         sys.exit(f"File not found: {gpx_path}")
 
     load_theme(args.theme, script_dir=Path(__file__).parent)
+    _build_cache_type_colors()   # merge theme colors with local labels
 
     # Resolve DB path early so we can report its status before building
     db_path = resolve_db_path(getattr(args, 'db', None))
@@ -863,24 +889,19 @@ def main():
     overlays = [o.strip().lower() for o in (args.overlay or '').split(',') if o.strip()]
 
     # Pre-build separate sets of US state codes and Canadian province codes.
-    # _POSTAL_STATE maps 2-letter postal codes -> full names for both countries.
-    # GPX state fields may be either the 2-letter code (GSAK exports, Canada)
-    # or the full name (geocaching.com exports, US).  We build a reverse lookup
-    # (lowercased full name -> postal code) to handle both forms.
-    _CA_PROVINCE_CODES = {
-        'AB','BC','MB','NB','NL','NS','NT','NU','ON','PE','QC','SK','YT',
-    }
+    # CA_CODES and _POSTAL_STATE come from location_mapping, which is always
+    # available. GPX state fields may be either the 2-letter code (GSAK exports,
+    # Canada) or the full name (geocaching.com exports, US).  We build a reverse
+    # lookup (lowercased full name -> postal code) to handle both forms.
+    from location_mapping import CA_CODES as _CA_PROVINCE_CODES, _POSTAL_STATE as _ps_lm
     try:
-        from gsak_counties import _POSTAL_STATE as _ps, lookup_county as _lookup_county
-        _us_codes: set = set(_ps.keys()) - _CA_PROVINCE_CODES
-        _ca_codes: set = set(_ps.keys()) & _CA_PROVINCE_CODES
-        # Reverse map: lowercase full name -> 2-letter code (covers both US and CA)
-        _name_to_code: dict = {name.lower(): code for code, name in _ps.items()}
+        from gsak_counties import lookup_county as _lookup_county
     except ImportError:
-        _us_codes = set()
-        _ca_codes = _CA_PROVINCE_CODES
-        _name_to_code = {}
         _lookup_county = None
+    _us_codes: set = set(_ps_lm.keys()) - _CA_PROVINCE_CODES
+    _ca_codes: set = _CA_PROVINCE_CODES
+    # Reverse map: lowercase full name -> 2-letter code (covers both US and CA)
+    _name_to_code: dict = {name.lower(): code for code, name in _ps_lm.items()}
 
     # Combined set used in _cnty_key to detect "use the US/CA DB branch"
     _us_ca_codes: set = _us_codes | _ca_codes

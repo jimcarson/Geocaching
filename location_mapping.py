@@ -9,7 +9,7 @@
 #   - East Timor added as alias for Timor-Leste
 #   - Kosovo added with de-facto code XK
 # ---------------------------------------------------------------------------
-__version__ = "1.0.0"  # Name to ISO mappings
+__version__ = "1.0.2"  # add US_CODES frozenset; add DXCC_US/DXCC_CA constants
 
 _STATE_POSTAL: dict[str, str] = {
     # US states — standard spaced names
@@ -577,6 +577,18 @@ def _dir_to_postal(dir_name: str) -> str | None:
 _POSTAL_STATE: dict[str, str] = {v: k for k, v in _STATE_POSTAL.items()}
 
 CA_CODES = {'AB','BC','MB','NB','NL','NS','NU','ON','PE','QC','SK','YT','NT'}
+
+# DXCC entity numbers for the US and Canada, as used in ADIF DXCC fields.
+DXCC_US: str = '291'
+DXCC_CA: str = '1'
+
+# US state + territory postal codes — derived from _STATE_POSTAL minus CA_CODES.
+# Used by map_core.build_counties_overlay() to route keys to us_counties.geojson
+# vs. the international DB path.  Includes DC and insular territories.
+US_CODES: frozenset = frozenset(
+    {v for v in _STATE_POSTAL.values() if v not in CA_CODES}
+    | {'DC', 'AS', 'GU', 'MP', 'PR', 'VI'}   # territories not in _STATE_POSTAL
+)
 
 # Virginia independent cities that end in "City" in their GSAK stem.
 # These get the " City" suffix stripped for the ADIF key (e.g. "VA,Alexandria").
