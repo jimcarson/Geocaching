@@ -25,12 +25,12 @@ Options:
     --overlay LIST      Comma-separated overlays: states, counties, grids
                         (requires adif_setup.py boundary files)
     --theme FILE        Color theme YAML (default: theme_default.yaml)
-    --show-filters      Show collapsible type/D/T filter panel
+    --no-filters        Hide the collapsible type/D/T filter panel (shown by default)
     --output FILE       Output HTML filename (default: map_output.html)
     --verbose           Show cache type breakdown and skipped count
 """
 
-__version__ = "1.3.3"  # pass verbose to build_base_map for tile layer summary
+__version__ = "1.3.6"  # add Project APE type; fix label truncation; add Traditional/Virtual groups; fix D/T slider filtering
 
 import argparse
 import sys
@@ -194,10 +194,15 @@ _CACHE_TYPE_LABELS: dict = {
     'Virtual Cache':            'Virtual',
     'Letterbox Hybrid':         'Letterbox',
     'Wherigo Cache':            'Wherigo',
-    'Cache In Trash Out Event': 'CITO',
-    'Mega-Event Cache':         'Mega',
-    'Giga-Event Cache':         'Giga',
-    'Event Cache':              'Event',
+    'Cache In Trash Out Event':   'CITO',
+    'Mega-Event Cache':           'Mega',
+    'Giga-Event Cache':           'Giga',
+    'Event Cache':                'Event',
+    'GPS Adventures Exhibit':     'GPS Adventures',
+    'Geocaching HQ Block Party':  'HQ Block Party',
+    'Geocaching HQ Celebration':  'HQ Celebration',
+    'Community Celebration Event': 'Community Celebration',
+    'Project APE Cache':          'Project APE',
 }
 
 # Populated by _build_cache_type_colors() after load_theme() is called.
@@ -245,6 +250,41 @@ _TYPE_ALIASES: dict = {
     'mega':        'Mega-Event Cache',
     'giga':        'Giga-Event Cache',
     'event':       'Event Cache',
+    'gps':         'GPS Adventures Exhibit',
+    'gpsadventures': 'GPS Adventures Exhibit',
+    'hqblock':     'Geocaching HQ Block Party',
+    'blockparty':  'Geocaching HQ Block Party',
+    'hqcelebration': 'Geocaching HQ Celebration',
+    'community':   'Community Celebration Event',
+}
+
+# ---------------------------------------------------------------------------
+# Cache type groups for the filter panel
+# ---------------------------------------------------------------------------
+# Each entry: group_label -> list of canonical cache type keys (members).
+# The group's representative color is taken from the first member present
+# in the data.  Types not listed in any group render as flat (ungrouped) rows.
+
+CACHE_TYPE_GROUPS: dict[str, list[str]] = {
+    'Events': [
+        'Event Cache',
+        'Mega-Event Cache',
+        'Giga-Event Cache',
+        'Cache In Trash Out Event',
+        'Geocaching HQ Block Party',
+        'Geocaching HQ Celebration',
+        'Community Celebration Event',
+        'GPS Adventures Exhibit',
+    ],
+    'Traditional': [
+        'Traditional Cache',
+        'Letterbox Hybrid',
+        'Wherigo Cache',
+    ],
+    'Virtual': [
+        'Virtual Cache',
+        'Webcam Cache',
+    ],
 }
 
 
@@ -281,8 +321,8 @@ def _label_for(cache_type: str) -> str:
     entry = CACHE_TYPE_COLORS.get(cache_type)
     if isinstance(entry, tuple):
         return entry[1]
-    # Fall back to first word of type name
-    return cache_type.split()[0] if cache_type else 'Other'
+    # Fall back to the full type name (strip trailing " Cache" for brevity)
+    return cache_type.replace(' Cache', '').strip() if cache_type else 'Other'
 
 
 # ---------------------------------------------------------------------------
@@ -535,7 +575,8 @@ def build_map(center: tuple, caches: list,
         )
 
         if ctype not in type_fgs:
-            fg = folium.FeatureGroup(name=f"Type: {label}", show=True)
+            fg = folium.FeatureGroup(name=f"Type: {label}", show=True,
+                                     control=False)
             type_fgs[ctype] = fg
             type_clusters[ctype] = MarkerCluster(
                 icon_create_function=cluster_icon_fn,
@@ -543,6 +584,11 @@ def build_map(center: tuple, caches: list,
             ).add_to(fg)
 
         dot = CONTACT_DOT
+        # Encode difficulty/terrain in className so the JS D/T filter can find markers.
+        # Format: gc-marker-d{diff*10}-t{terr*10}  (multiply by 10 to avoid decimals)
+        d_int = int(round(c['difficulty'] * 10))
+        t_int = int(round(c['terrain']    * 10))
+        marker_class = f"gc-marker gc-d{d_int} gc-t{t_int}"
         folium.CircleMarker(
             location=(c['lat'], c['lon']),
             radius=dot.get('radius', 6),
@@ -553,6 +599,7 @@ def build_map(center: tuple, caches: list,
             fill_opacity=dot.get('fill_opacity', 0.85),
             tooltip=tooltip_text,
             popup=folium.Popup(popup_html, max_width=280),
+            class_name=marker_class,
         ).add_to(type_clusters[ctype])
         plotted += 1
 
@@ -604,7 +651,9 @@ def inject_filter_panel(m: folium.Map, caches: list,
     """
     Inject a collapsible filter panel (top-left, starts collapsed).
     Contains:
-      - Cache type checkboxes (toggle FeatureGroup layers)
+      - Cache type checkboxes (toggle FeatureGroup layers), with grouped
+        types rendered under a tri-state parent checkbox (defined by
+        CACHE_TYPE_GROUPS).  Ungrouped types render as flat rows.
       - Difficulty slider (min/max)
       - Terrain slider (min/max)
     """
@@ -616,7 +665,7 @@ def inject_filter_panel(m: folium.Map, caches: list,
     type_fg_names = {ct: fg.get_name() for ct, fg in type_fgs.items()}
     type_fg_names_js = json.dumps(type_fg_names)
 
-    # Build type color map for swatches
+    # Build type color / label maps for swatches
     type_colors = {ct: _color_for(ct) for ct in types_present}
     type_labels = {ct: _label_for(ct) for ct in types_present}
     type_colors_js = json.dumps(type_colors)
@@ -628,6 +677,30 @@ def inject_filter_panel(m: folium.Map, caches: list,
         for c in caches
     }
     cache_data_js = json.dumps(cache_data)
+
+    # Determine which types belong to which group (present-only members)
+    # groups_present: { group_label: [canonical_type, ...] }  — only members in types_present
+    groups_present: dict[str, list[str]] = {}
+    grouped_types:  set[str] = set()
+    for group_label, members in CACHE_TYPE_GROUPS.items():
+        present_members = [ct for ct in members if ct in types_present]
+        if present_members:
+            groups_present[group_label] = present_members
+            grouped_types.update(present_members)
+
+    # Flat (ungrouped) types: present types not claimed by any group
+    flat_types = [ct for ct in types_present if ct not in grouped_types]
+
+    # Representative color for each group: first present member's color
+    group_colors = {
+        gl: _color_for(members[0])
+        for gl, members in groups_present.items()
+    }
+
+    # Pass group structure to JS
+    groups_js      = json.dumps(groups_present)   # {label: [ct, ...]}
+    group_colors_js = json.dumps(group_colors)    # {label: color}
+    flat_types_js  = json.dumps(flat_types)
 
     panel_html = f"""
 <style>
@@ -653,8 +726,22 @@ def inject_filter_panel(m: folium.Map, caches: list,
 }}
 #gc-fp .sh:hover {{ background:#f5f5f5; }}
 #gc-fp .sb {{ padding:2px 8px 6px 10px; }}
+/* flat type row */
 #gc-fp .tr {{ display:flex; align-items:center; gap:6px; padding:2px 0; }}
 #gc-fp .tr:hover {{ background:#f8f8f8; border-radius:3px; padding:2px 2px; margin:0 -2px; }}
+/* group header row */
+#gc-fp .gr {{
+    display:flex; align-items:center; gap:6px; padding:3px 0 1px;
+    font-weight:bold; cursor:pointer;
+}}
+#gc-fp .gr:hover {{ background:#f0f0f0; border-radius:3px; padding:3px 2px 1px; margin:0 -2px; }}
+#gc-fp .gr-chev {{ font-size:9px; color:#aaa; margin-left:auto; }}
+/* sub-type rows (indented) */
+#gc-fp .sr {{
+    display:flex; align-items:center; gap:6px;
+    padding:2px 0 2px 18px;
+}}
+#gc-fp .sr:hover {{ background:#f8f8f8; border-radius:3px; margin:0 -2px; padding:2px 2px 2px 20px; }}
 #gc-fp .sw {{
     display:inline-block; width:10px; height:10px; border-radius:50%;
     border:1px solid rgba(0,0,0,0.2); flex-shrink:0;
@@ -706,33 +793,16 @@ setTimeout(function() {{
     var typeFgNames  = {type_fg_names_js};
     var typeColors   = {type_colors_js};
     var typeLabels   = {type_labels_js};
+    var groupsDef    = {groups_js};        // {{label: [ct, ...]}}
+    var groupColors  = {group_colors_js};  // {{label: color}}
+    var flatTypes    = {flat_types_js};    // [ct, ...]
 
     var activeTypes = new Set(Object.keys(typeFgNames));
     var diffMin = 1, diffMax = 5, terrMin = 1, terrMax = 5;
 
     function getLayer(n) {{ return window[n] || null; }}
 
-    // ── Build type checkboxes ─────────────────────────────────
-    var typesBody = document.getElementById('gc-types-body');
-    if (typesBody) {{
-        Object.keys(typeFgNames).forEach(function(ct) {{
-            var row = document.createElement('div');
-            row.className = 'tr';
-            var cb = document.createElement('input');
-            cb.type='checkbox'; cb.id='cb-ct-'+ct; cb.checked=true;
-            cb.addEventListener('change', function() {{ gcTypeToggle(ct, this.checked); }});
-            var sw = document.createElement('span');
-            sw.className='sw'; sw.style.background = typeColors[ct] || '#888';
-            var lb = document.createElement('label');
-            lb.htmlFor='cb-ct-'+ct;
-            lb.textContent = typeLabels[ct] || ct.split(' ')[0];
-            lb.style.cursor='pointer';
-            row.appendChild(cb); row.appendChild(sw); row.appendChild(lb);
-            typesBody.appendChild(row);
-        }});
-    }}
-
-    // ── Type toggle ───────────────────────────────────────────
+    // ── Layer toggle (single type) ────────────────────────────
     window.gcTypeToggle = function(ct, checked) {{
         var layer = getLayer(typeFgNames[ct]);
         if (layer) {{
@@ -742,7 +812,167 @@ setTimeout(function() {{
         if (checked) activeTypes.add(ct); else activeTypes.delete(ct);
     }};
 
+    // ── Build type checkboxes (grouped + flat) ────────────────
+    var typesBody = document.getElementById('gc-types-body');
+    if (typesBody) {{
+
+        // ── Grouped types ─────────────────────────────────────
+        Object.keys(groupsDef).forEach(function(grpLabel) {{
+            var members = groupsDef[grpLabel];
+            if (!members || !members.length) return;
+
+            // Sanitise group label for use in DOM ids
+            var grpId = 'grp-' + grpLabel.replace(/[^a-zA-Z0-9_]/g, '_');
+
+            // ── Group header row ──────────────────────────────
+            var grpRow = document.createElement('div');
+            grpRow.className = 'gr';
+
+            var grpCb = document.createElement('input');
+            grpCb.type = 'checkbox';
+            grpCb.id   = 'cb-' + grpId;
+            grpCb.checked = true;
+
+            var grpSw = document.createElement('span');
+            grpSw.className = 'sw';
+            grpSw.style.background = groupColors[grpLabel] || '#888';
+
+            var grpLb = document.createElement('label');
+            grpLb.htmlFor    = 'cb-' + grpId;
+            grpLb.textContent = grpLabel;
+            grpLb.style.cursor = 'pointer';
+            grpLb.style.fontWeight = 'bold';
+
+            var grpChev = document.createElement('span');
+            grpChev.className = 'gr-chev';
+            grpChev.textContent = '▼';
+
+            grpRow.appendChild(grpCb);
+            grpRow.appendChild(grpSw);
+            grpRow.appendChild(grpLb);
+            grpRow.appendChild(grpChev);
+            typesBody.appendChild(grpRow);
+
+            // ── Sub-type rows ─────────────────────────────────
+            var subDiv = document.createElement('div');
+            subDiv.id = grpId + '-sub';
+            typesBody.appendChild(subDiv);
+
+            members.forEach(function(ct) {{
+                var row = document.createElement('div');
+                row.className = 'sr';
+
+                var cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.id   = 'cb-ct-' + ct.replace(/[^a-zA-Z0-9_]/g, '_');
+                cb.checked = true;
+                cb.setAttribute('data-grp', grpId);
+                cb.addEventListener('change', function() {{
+                    gcTypeToggle(ct, this.checked);
+                    updateGroupState(grpId, grpCb);
+                }});
+
+                var sw = document.createElement('span');
+                sw.className = 'sw';
+                sw.style.background = typeColors[ct] || '#888';
+
+                var lb = document.createElement('label');
+                lb.htmlFor    = 'cb-ct-' + ct.replace(/[^a-zA-Z0-9_]/g, '_');
+                lb.textContent = typeLabels[ct] || ct.split(' ')[0];
+                lb.style.cursor = 'pointer';
+
+                row.appendChild(cb); row.appendChild(sw); row.appendChild(lb);
+                subDiv.appendChild(row);
+            }});
+
+            // ── Tri-state parent logic ────────────────────────
+            function updateGroupState(gid, parentCb) {{
+                var subs = document.querySelectorAll('[data-grp="' + gid + '"]');
+                var total = subs.length, on = 0;
+                subs.forEach(function(s) {{ if (s.checked) on++; }});
+                if (on === total) {{
+                    parentCb.checked       = true;
+                    parentCb.indeterminate = false;
+                }} else if (on === 0) {{
+                    parentCb.checked       = false;
+                    parentCb.indeterminate = false;
+                }} else {{
+                    parentCb.checked       = false;
+                    parentCb.indeterminate = true;
+                }}
+            }}
+
+            // Parent checkbox: toggle all children
+            grpCb.addEventListener('change', function() {{
+                var target = this.checked;
+                // If was indeterminate the browser sets checked=true — treat as "turn all on"
+                var subs = document.querySelectorAll('[data-grp="' + grpId + '"]');
+                subs.forEach(function(sub) {{
+                    if (sub.checked !== target) {{
+                        sub.checked = target;
+                        // Determine canonical type from sub id
+                        members.forEach(function(ct) {{
+                            if (sub.id === 'cb-ct-' + ct.replace(/[^a-zA-Z0-9_]/g, '_')) {{
+                                gcTypeToggle(ct, target);
+                            }}
+                        }});
+                    }}
+                }});
+                this.indeterminate = false;
+            }});
+
+            // ── Collapse sub-rows on group chevron click ──────
+            grpChev.style.cursor = 'pointer';
+            grpChev.addEventListener('click', function(e) {{
+                e.stopPropagation();
+                var sub = document.getElementById(grpId + '-sub');
+                if (!sub) return;
+                var hidden = sub.style.display === 'none';
+                sub.style.display = hidden ? '' : 'none';
+                grpChev.textContent = hidden ? '▼' : '▶';
+            }});
+        }});
+
+        // ── Flat (ungrouped) types ────────────────────────────
+        flatTypes.forEach(function(ct) {{
+            if (!typeFgNames[ct]) return;
+            var row = document.createElement('div');
+            row.className = 'tr';
+            var cb = document.createElement('input');
+            cb.type = 'checkbox'; cb.id = 'cb-ct-' + ct.replace(/[^a-zA-Z0-9_]/g, '_'); cb.checked = true;
+            cb.addEventListener('change', function() {{ gcTypeToggle(ct, this.checked); }});
+            var sw = document.createElement('span');
+            sw.className = 'sw'; sw.style.background = typeColors[ct] || '#888';
+            var lb = document.createElement('label');
+            lb.htmlFor = 'cb-ct-' + ct.replace(/[^a-zA-Z0-9_]/g, '_');
+            lb.textContent = typeLabels[ct] || ct.split(' ')[0];
+            lb.style.cursor = 'pointer';
+            row.appendChild(cb); row.appendChild(sw); row.appendChild(lb);
+            typesBody.appendChild(row);
+        }});
+    }}
+
     // ── D/T slider wiring ─────────────────────────────────────
+    // Each CircleMarker SVG path carries classes: gc-marker gc-d{{diff*10}} gc-t{{terr*10}}
+    // We show/hide by toggling display on the parent <g> element (the path's container).
+    function applyDTFilter() {{
+        var dLo = Math.round(diffMin * 10), dHi = Math.round(diffMax * 10);
+        var tLo = Math.round(terrMin * 10), tHi = Math.round(terrMax * 10);
+        document.querySelectorAll('path.gc-marker').forEach(function(path) {{
+            // Extract d and t values from class list
+            var cls = path.className.baseVal || path.getAttribute('class') || '';
+            var dm = cls.match(/gc-d([0-9]+)/);
+            var tm = cls.match(/gc-t([0-9]+)/);
+            if (!dm || !tm) return;
+            var d = parseInt(dm[1], 10);
+            var t = parseInt(tm[1], 10);
+            var visible = (d >= dLo && d <= dHi && t >= tLo && t <= tHi);
+            // CircleMarker SVG: path is inside a <g>; hide/show the <g>
+            var g = path.parentElement;
+            if (g) g.style.display = visible ? '' : 'none';
+        }});
+    }}
+
     function wireSlider(minId, maxId, minValId, maxValId, onchange) {{
         var sMin = document.getElementById(minId);
         var sMax = document.getElementById(maxId);
@@ -756,6 +986,7 @@ setTimeout(function() {{
             if (vMin) vMin.textContent = lo;
             if (vMax) vMax.textContent = hi;
             onchange(lo, hi);
+            applyDTFilter();
         }}
         sMin.addEventListener('input', update);
         sMax.addEventListener('input', update);
@@ -831,8 +1062,9 @@ def main():
                         help="Comma-separated overlays: states, counties, grids")
     parser.add_argument("--theme",
                         help="Color theme YAML (default: theme_default.yaml)")
-    parser.add_argument("--show-filters", dest="show_filters", action="store_true",
-                        help="Show collapsible type/D/T filter panel")
+    parser.add_argument("--no-filters", dest="show_filters", action="store_false",
+                        default=True,
+                        help="Hide the collapsible type/D/T filter panel")
     parser.add_argument("--output",
                         help="Output HTML path (default: map_output.html beside GPX)")
     parser.add_argument("--verbose", action="store_true",

@@ -40,3 +40,6 @@ coverage.xml
 docs/_build/
 gsak/
 *.db*
+map_output.html
+samples/
+gsak.zip
