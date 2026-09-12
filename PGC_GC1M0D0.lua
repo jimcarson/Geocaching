@@ -2,6 +2,8 @@ local args={...}
 local conf = args[1].config
 local profileName = args[1].profileName
 local profileId = args[1].profileId
+
+local __version__ = "2.4 (2026-09-12)"  -- 2.4: version string now includes the date
 -- polygon format:
 -- {
 --   ["name"] = polypoints = { { { lat, long }, { lat, long }, ... }, { { lat, long }, { lat, long }, ... } },
@@ -45,27 +47,65 @@ local seen = {}
 
 --PGC.print(conf.polyset)
 initialpolygons = Bellevue_polygon
+PGC.print("Checker version ", __version__, "\n")
+
+-- Recently-archived cutoff, used to flag whether an archived cache we
+-- encounter (either skipped from polyCaches or already found) was
+-- archived within the last 30 days. Confirmed os.date/os.time work in
+-- the PGC sandbox (2026-09-12), but guarded with pcall in case that
+-- ever changes.
+local archivedCutoff30 = nil
+local recentlySkippedArchived = 0
+local recentlyArchivedFinds = 0
+do
+  local ok, result = pcall(function()
+    return os.date("%Y-%m-%d", os.time() - (30 * 24 * 60 * 60))
+  end)
+  if ok then
+    archivedCutoff30 = result
+    PGC.print("Recently-archived threshold (last 30 days): on/after ", archivedCutoff30, "\n")
+  else
+    PGC.print("os.date/os.time unavailable; skipping recently-archived comparison\n")
+  end
+end
+
+-- Watch list: print every field PGC returns for these gccodes, whenever
+-- they show up in a GetOldestCaches result, regardless of what happens
+-- to them afterward. Useful for telling whether PGC's own cache data is
+-- stale for a specific reported cache (vs. a bug in this script).
+local watchedGccodes = {
+  ["GC43HTG"] = true,  -- reported false-positive: archived 2026-09-02, seen leaking past excludeArchived
+}
 
 local eventcachetypes = {
   "Event Cache",
   "Mega-Event Cache",
   "Giga-Event Cache",
   "Cache In Trash Out Event",
-  "Lost and Found Event Cache",
-  "GPS Adventures Exhibit",
-  "Groundspeak Block Party"
+  "Community Celebration Event",
+  "GPS Adventures Maze Exhibit",
+  "Geocaching HQ Block Party"
 }
 
 --
 -- Caches excluded from the challenge:
 -- 1) Manually excluded by gccode (edge cases not caught by name matching)
--- 2) Unknown Cache type with "Challenge" or "Bonus" in the name (auto-detected below)
+-- 2) Mystery Cache type with "Challenge" or "Bonus" in the name (auto-detected below)
 -- 2026-02-27 jim_carson
+--
+-- 2026-09-12 jim_carson
+-- - fetchAndInsert now skips any result with archived == "1" as a safety net,
+--   since excludeArchived on GetOldestCaches does not always catch caches
+--   that were archived recently (e.g. GC43HTG).
+-- - fetchAndInsert now auto-paginates past the 1000-row limit by re-querying
+--   from the max hidden date seen in a saturated batch, instead of relying on
+--   a manually hardcoded date split (removed the pre-2026/2026+ T1.5 split).
+-- - Added a debug listing of archived caches already found in the polygon.
 local excluded_caches = {
   "GC24KA3", -- Cougar Mountain Blackout (falls outside of polygon)
 }
 
--- Terms that identify Unknown Caches to auto-exclude by name
+-- Terms that identify Mystery Caches to auto-exclude by name
 local excluded_name_terms = { "Challenge", "Bonus Cache" }
 
 -- Newer GC codes start with GC + one letter + 4 alphanumeric chars (e.g. GCB75J8)
@@ -85,7 +125,7 @@ function IsExcludedCache(gc, cachetype, cachename)
     PGC.print("Excluded cache (manual):", gc, "\n")
     return true
   end
-  if cachetype == "Unknown Cache" and cachename ~= nil and isNewerGCCode(gc) then
+  if cachetype == "Mystery Cache" and cachename ~= nil and isNewerGCCode(gc) then
     for _, term in ipairs(excluded_name_terms) do
       if string.find(cachename, term, 1, true) then
         PGC.print("Excluded cache (auto):", gc, " - ", cachename, "\n")
@@ -291,8 +331,8 @@ end
 -- Queries are split by type/difficulty/terrain buckets to stay under the 1000-cache API limit.
 -- Each entry: { label, types, difficulties, terrains }
 local ALL_DIFF = {'1.0', '1.5', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'}
-local NON_TRAD = {'Multi-cache', 'Virtual Cache', 'Letterbox Hybrid', 'Unknown Cache',
-                  'Project APE Cache', 'Webcam Cache', 'Earthcache', 'Wherigo Cache'}
+local NON_TRAD = {'Multi-Cache', 'Virtual Cache', 'Letterbox Hybrid', 'Mystery Cache',
+                  'Project A.P.E. Cache', 'Webcam Cache', 'EarthCache', 'Wherigo Cache'}
 local NOT_1HALF_DIFF = {'1.0', '2.0', '2.5', '3.0', '3.5', '4.0', '4.5', '5.0'}
 
 local activeCachesInPolygon = 0
@@ -301,9 +341,9 @@ local polyCaches = {}
 local cacheQueries = {
   -- Traditional, D1½ buckets (2026-02-27 counts)
   { label="Trad, D1½, T1",    types={'Traditional Cache'}, difficulties={'1.5'},         terrains={'1.0'} },
-  -- Trad D1½ T1½ is near saturation so split by date to be safe
-  { label="Trad, D1½, T1½ (pre-2026)",  types={'Traditional Cache'}, difficulties={'1.5'}, terrains={'1.5'} },
-  { label="Trad, D1½, T1½ (2026+)",     types={'Traditional Cache'}, difficulties={'1.5'}, terrains={'1.5'}, minHiddenDate="2026-01-01" },
+  -- Trad D1½ T1½ used to be manually split at 2026-01-01 to dodge the 1000-row
+  -- limit; fetchAndInsert now auto-paginates by hidden date instead (see below)
+  { label="Trad, D1½, T1½",  types={'Traditional Cache'}, difficulties={'1.5'}, terrains={'1.5'} },
   { label="Trad, D1½, T>1½",  types={'Traditional Cache'}, difficulties={'1.5'},         terrains={'2.0','2.5','3.0','3.5','4.0','4.5','5.0'} },
   -- Traditional, D!=1½ buckets
   { label="Trad, !D1½, T1",   types={'Traditional Cache'}, difficulties=NOT_1HALF_DIFF, terrains={'1.0'} },
@@ -316,41 +356,102 @@ local cacheQueries = {
   { label="Not trad, all D, T>1½", types=NON_TRAD, difficulties=ALL_DIFF, terrains={'2.0','2.5','3.0','3.5','4.0','4.5','5.0'} },
 }
 
--- Fetch one bucket, check saturation, insert matching polygon caches
+-- Fetch one bucket, check saturation, insert matching polygon caches.
+-- Auto-paginates past the 1000-row API limit: if a batch comes back
+-- saturated, re-queries starting from the newest "hidden" date seen in
+-- that batch, instead of relying on a manually hardcoded date split.
+-- The existing seen[] dedup absorbs any repeated rows on the boundary
+-- date between pages.
+local MAX_FETCH_PAGES = 20
+
 local function fetchAndInsert(query)
-  local results = PGC.GetOldestCaches({
-    limit = 1000,
-    dontCountArchivedTowardsLimit = true,
-    dontCountDisabledTowardsLimit = true,
-    filter = {
-      country      = conf.country,
-      region       = conf.region,
-      county       = conf.county,
-      types        = query.types,
-      difficulties = query.difficulties,
-      terrains     = query.terrains,
-      minHiddenDate = query.minHiddenDate,  -- nil if not set, uses API default
-      excludeDisabled = true,
-      excludeArchived = true,
-    }
-  })
-  local count = #results
-  PGC.print(query.label, ": ", count, "\n")
-  if count >= 1000 then
-    PGC.print("getCaches got into saturation (> 1000 caches)\n")
-    checkerFail = true
-  end
-  for _, cache in ipairs(results) do
-    local lat = tonumber(cache.latitude)
-    local lon = tonumber(cache.longitude)
-    local poly = isInPolygon(lat, lon)
-    if poly and (not IsExcludedCache(cache.gccode, cache.type, cache.cache_name)) then
-      if not seen[cache.gccode] then
-        seen[cache.gccode] = true
-        table.insert(polyCaches, cache)
-        activeCachesInPolygon = activeCachesInPolygon + 1
+  local page = 1
+  local minDate = query.minHiddenDate  -- nil on first page uses API default
+
+  while true do
+    local results = PGC.GetOldestCaches({
+      limit = 1000,
+      dontCountArchivedTowardsLimit = true,
+      dontCountDisabledTowardsLimit = true,
+      filter = {
+        country      = conf.country,
+        region       = conf.region,
+        county       = conf.county,
+        types        = query.types,
+        difficulties = query.difficulties,
+        terrains     = query.terrains,
+        minHiddenDate = minDate,
+        excludeDisabled = true,
+        excludeArchived = true,
+      }
+    })
+    local count = #results
+    if page == 1 then
+      PGC.print(query.label, ": ", count, "\n")
+    else
+      PGC.print(query.label, " (page ", page, ", from ", minDate, "): ", count, "\n")
+    end
+
+    local maxHidden = nil
+    for _, cache in ipairs(results) do
+      if watchedGccodes[cache.gccode] then
+        PGC.print("  WATCH: ", cache.gccode, " ", (cache.cache_name or "?"),
+          " type=", (cache.type or "?"),
+          " archived=", (cache.archived or "?"),
+          " disabled=", (cache.disabled or "?"),
+          " last_archive_date=", (cache.last_archive_date or "?"),
+          " hidden=", (cache.hidden or "?"),
+          " latitude=", (cache.latitude or "?"),
+          " longitude=", (cache.longitude or "?"), "\n")
+      end
+      if cache.hidden ~= nil and (maxHidden == nil or cache.hidden > maxHidden) then
+        maxHidden = cache.hidden
+      end
+      if cache.archived == "1" then
+        -- safety net: excludeArchived does not always catch recently
+        -- archived caches (e.g. GC43HTG, archived 2026-09-02)
+        local recentTag = ""
+        if archivedCutoff30 ~= nil and cache.last_archive_date ~= nil
+           and cache.last_archive_date >= archivedCutoff30 then
+          recentTag = " [RECENT: archived within last 30 days]"
+          recentlySkippedArchived = recentlySkippedArchived + 1
+        end
+        PGC.print("  Skipped stale-archived result: ", cache.gccode, " ",
+          (cache.cache_name or "?"), " (last_archive_date=",
+          (cache.last_archive_date or "?"), ")", recentTag, "\n")
+      else
+        local lat = tonumber(cache.latitude)
+        local lon = tonumber(cache.longitude)
+        local poly = isInPolygon(lat, lon)
+        if poly and (not IsExcludedCache(cache.gccode, cache.type, cache.cache_name)) then
+          if not seen[cache.gccode] then
+            seen[cache.gccode] = true
+            table.insert(polyCaches, cache)
+            activeCachesInPolygon = activeCachesInPolygon + 1
+          end
+        end
       end
     end
+
+    if count < 1000 then
+      break
+    end
+
+    if maxHidden == nil then
+      PGC.print("getCaches got into saturation (> 1000 caches) with no hidden date to page from\n")
+      checkerFail = true
+      break
+    end
+
+    if page >= MAX_FETCH_PAGES then
+      PGC.print("getCaches hit MAX_FETCH_PAGES (", MAX_FETCH_PAGES, ") while paginating; giving up\n")
+      checkerFail = true
+      break
+    end
+
+    PGC.print("  Bucket saturated at boundary date ", maxHidden, "; continuing from there\n")
+    minDate = maxHidden
+    page = page + 1
   end
 end
 
@@ -439,6 +540,7 @@ end
 local types = {}
 local nonTraditional = 0
 local archivedFinds = 0
+local archivedFindsList = {}
 local disabledInPolygon = {}
 
 for _, cache in ipairs(finds) do
@@ -453,6 +555,7 @@ for _, cache in ipairs(finds) do
       if cache.archived == "1" then
         -- count archived finds separately for historical reference
         archivedFinds = archivedFinds + 1
+        table.insert(archivedFindsList, cache)
       elseif cache.disabled == "1" then
         -- track disabled caches in polygon for debug, but do not count toward qualification
         table.insert(disabledInPolygon, cache)
@@ -475,6 +578,27 @@ if #disabledInPolygon > 0 then
   for _, cache in ipairs(disabledInPolygon) do
     PGC.print("  DISABLED: ", cache.gccode, " ", cache.cache_name, "\n")
   end
+end
+
+-- debug: list archived caches already found in the polygon
+if #archivedFindsList > 0 then
+  PGC.print("Archived caches already found in polygon (", #archivedFindsList, "):\n")
+  for _, cache in ipairs(archivedFindsList) do
+    local recentTag = ""
+    if archivedCutoff30 ~= nil and cache.last_archive_date ~= nil
+       and cache.last_archive_date >= archivedCutoff30 then
+      recentTag = " [RECENT: archived within last 30 days]"
+      recentlyArchivedFinds = recentlyArchivedFinds + 1
+    end
+    PGC.print("  ARCHIVED-FOUND: ", cache.gccode, " ", cache.cache_name,
+      " (last_archive_date=", (cache.last_archive_date or "?"), ")", recentTag, "\n")
+  end
+end
+
+if archivedCutoff30 ~= nil then
+  PGC.print("Recently-archived summary: ", recentlySkippedArchived,
+    " stale-archived result(s) skipped and ", recentlyArchivedFinds,
+    " already-found cache(s) were archived within the last 30 days\n")
 end
 
 local totalFinds = 0
